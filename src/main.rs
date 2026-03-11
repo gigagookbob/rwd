@@ -1,5 +1,6 @@
 // mod 키워드로 모듈을 선언합니다.
 // Rust는 파일 하나가 모듈 하나에 대응됩니다 — cli.rs 파일이 cli 모듈이 됩니다 (Rust Book Ch.7 참조).
+mod analyzer;
 mod cli;
 mod parser;
 
@@ -7,7 +8,12 @@ mod parser;
 use clap::Parser;
 use cli::Commands;
 
-fn main() {
+/// #[tokio::main]은 async fn main()을 동기 main()으로 변환하는 속성 매크로입니다.
+/// 내부적으로 tokio 런타임을 생성하고, async 블록을 실행합니다.
+/// tokio는 Rust의 비동기 런타임으로, async/await를 실행하는 "엔진" 역할을 합니다.
+/// (tokio 공식 튜토리얼: https://tokio.rs/tokio/tutorial 참조)
+#[tokio::main]
+async fn main() {
     // Parser::parse()는 커맨드라인 인자를 읽어서 Cli 구조체로 변환합니다.
     // --help나 --version이 입력되면 자동으로 처리하고 프로그램을 종료합니다.
     let args = cli::Cli::parse();
@@ -16,9 +22,9 @@ fn main() {
     // Rust 컴파일러는 모든 변형(variant)을 처리했는지 검사합니다 — 빠뜨리면 컴파일 에러가 납니다.
     match args.command {
         Commands::Today => {
-            // run_today()가 Err를 반환하면 에러 메시지를 출력하고 종료합니다.
-            // if let은 Result가 특정 variant인 경우만 처리합니다 (Rust Book Ch.6.3 참조).
-            if let Err(e) = run_today() {
+            // run_today()가 async이므로 .await로 완료를 기다립니다.
+            // .await는 "이 비동기 작업이 끝날 때까지 기다려라"는 의미입니다.
+            if let Err(e) = run_today().await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -26,9 +32,12 @@ fn main() {
     }
 }
 
-/// 오늘의 세션 로그를 파싱하고 요약 정보를 출력합니다.
-/// 별도 함수로 분리하여 Result를 반환하면, ?로 에러를 깔끔하게 전파할 수 있습니다 (Rust Book Ch.9 참조).
-fn run_today() -> Result<(), parser::ParseError> {
+/// 오늘의 세션 로그를 파싱하고, LLM 분석을 수행하여 인사이트를 출력합니다.
+///
+/// async fn은 비동기 함수를 선언합니다 — 내부에서 .await를 사용할 수 있습니다.
+/// 비동기 함수는 호출 시 즉시 실행되지 않고, .await를 만나야 실행됩니다.
+/// 여기서는 analyzer::analyze_entries() 호출이 네트워크 I/O를 수행하므로 async가 필요합니다.
+async fn run_today() -> Result<(), parser::ParseError> {
     let today = chrono::Utc::now().date_naive();
     let base_dir = parser::discover_log_dir()?;
 
@@ -72,5 +81,47 @@ fn run_today() -> Result<(), parser::ParseError> {
         );
     }
 
+    // LLM 분석 수행
+    println!("\nClaude API로 인사이트 분석 중...");
+    // analyzer 실패 시에도 기존 요약은 이미 출력되었으므로 프로그램을 종료하지 않습니다.
+    // match로 성공/실패를 명시적으로 처리합니다 (?로 전파하지 않음).
+    match analyzer::analyze_entries(&all_entries).await {
+        Ok(analysis) => print_insights(&analysis),
+        Err(e) => eprintln!("분석 실패: {e}"),
+    }
+
     Ok(())
+}
+
+/// 분석 결과를 터미널에 출력합니다.
+fn print_insights(analysis: &analyzer::AnalysisResult) {
+    println!("\n=== 인사이트 분석 결과 ===");
+
+    for session in &analysis.sessions {
+        println!("\n--- Session: {} ---", session.session_id);
+        println!("요약: {}", session.work_summary);
+
+        if !session.decisions.is_empty() {
+            println!("\n선택 분기:");
+            for d in &session.decisions {
+                println!("  - {}", d.what);
+                println!("    이유: {}", d.why);
+            }
+        }
+
+        if !session.curiosities.is_empty() {
+            println!("\n궁금/헷갈렸던 것:");
+            for c in &session.curiosities {
+                println!("  - {c}");
+            }
+        }
+
+        if !session.corrections.is_empty() {
+            println!("\n모델 수정:");
+            for c in &session.corrections {
+                println!("  - 모델: {}", c.model_said);
+                println!("    수정: {}", c.user_corrected);
+            }
+        }
+    }
 }
