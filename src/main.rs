@@ -2,6 +2,7 @@
 // Rust는 파일 하나가 모듈 하나에 대응됩니다 — cli.rs 파일이 cli 모듈이 됩니다 (Rust Book Ch.7 참조).
 mod analyzer;
 mod cli;
+mod output;
 mod parser;
 
 // use 키워드로 다른 모듈의 항목을 현재 스코프로 가져옵니다.
@@ -86,11 +87,51 @@ async fn run_today() -> Result<(), parser::ParseError> {
     // analyzer 실패 시에도 기존 요약은 이미 출력되었으므로 프로그램을 종료하지 않습니다.
     // match로 성공/실패를 명시적으로 처리합니다 (?로 전파하지 않음).
     match analyzer::analyze_entries(&all_entries).await {
-        Ok(analysis) => print_insights(&analysis),
+        Ok(analysis) => {
+            print_insights(&analysis);
+            // [M4] 분석 결과를 Markdown으로 변환하여 vault에 저장합니다.
+            save_analysis(&analysis, today);
+        }
         Err(e) => eprintln!("분석 실패: {e}"),
     }
 
     Ok(())
+}
+
+/// [M4] 분석 결과를 Markdown으로 변환하여 Obsidian vault에 저장합니다.
+///
+/// 각 단계에서 실패하면 에러를 출력하고 return합니다 — 프로그램을 중단하지 않습니다.
+/// vault 경로가 설정되지 않아도 터미널 출력(print_insights)은 이미 완료된 상태입니다.
+fn save_analysis(analysis: &analyzer::AnalysisResult, date: chrono::NaiveDate) {
+    let vault_path = match output::load_vault_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Vault 경로 로드 실패: {e}");
+            return;
+        }
+    };
+
+    let markdown = output::render_markdown(analysis, date);
+
+    // 저장할 파일 경로를 미리 계산하여 덮어쓰기 확인에 사용합니다.
+    let file_path = vault_path.join(format!("{date}.md"));
+
+    match output::confirm_overwrite(&file_path) {
+        Ok(true) => {} // 진행
+        Ok(false) => {
+            println!("저장을 건너뜁니다.");
+            return;
+        }
+        Err(e) => {
+            eprintln!("입력 읽기 실패: {e}");
+            return;
+        }
+    }
+
+    match output::save_to_vault(&vault_path, date, &markdown) {
+        Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
+        Err(e) => eprintln!("파일 저장 실패: {e}"),
+    }
 }
 
 /// 분석 결과를 터미널에 출력합니다.
