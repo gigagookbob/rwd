@@ -82,8 +82,12 @@ async fn run_today() -> Result<(), parser::ParseError> {
         );
     }
 
-    // LLM 분석 수행
-    println!("\nClaude API로 인사이트 분석 중...");
+    // LLM 분석 수행 — provider::load_provider()가 프로바이더 선택과 API 키 로딩을 담당합니다.
+    // 여기서는 표시 이름만 읽어 사용자에게 어떤 프로바이더가 사용되는지 알려줍니다.
+    let provider_label = analyzer::provider::load_provider()
+        .map(|(p, _)| p.display_name().to_string())
+        .unwrap_or_else(|_| "LLM".to_string());
+    println!("\n{provider_label} API로 인사이트 분석 중...");
     // analyzer 실패 시에도 기존 요약은 이미 출력되었으므로 프로그램을 종료하지 않습니다.
     // match로 성공/실패를 명시적으로 처리합니다 (?로 전파하지 않음).
     match analyzer::analyze_entries(&all_entries).await {
