@@ -2,6 +2,10 @@
 name = "rwd"
 version = "0.1.0"
 edition = "2024"
+description = "AI 코딩 세션 로그를 분석하여 일일 개발 인사이트를 추출하는 CLI 도구"
+license = "MIT"
+repository = "https://github.com/gigagookbob/rwd"
+authors = ["gigagookbob"]
 
 [dependencies]
 clap = { version = "4.5", features = ["derive"] }
@@ -10,5 +14,5 @@ serde_json = "1"
 chrono = { version = "0.4", features = ["serde"] }
 dirs = "6"
 dotenvy = "0.15"
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
