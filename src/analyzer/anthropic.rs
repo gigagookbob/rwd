@@ -1,4 +1,4 @@
-// Claude Messages API HTTP 클라이언트.
+// Anthropic Claude Messages API 클라이언트.
 //
 // reqwest 크레이트로 비동기 HTTP 요청을 보냅니다.
 // async/await 패턴으로 네트워크 I/O 동안 스레드를 차단하지 않습니다.
@@ -12,45 +12,7 @@ const API_VERSION: &str = "2023-06-01";
 // 분석에 사용할 모델 (M5에서 설정 파일로 변경 예정)
 const MODEL: &str = "claude-opus-4-6";
 
-/// 시스템 프롬프트 — LLM에게 인사이트 추출 방법과 JSON 응답 형식을 지시합니다.
-const SYSTEM_PROMPT: &str = r#"You are an AI coding session analyst. You receive transcripts of conversations between a developer and an AI coding assistant.
-
-Analyze the conversation and extract insights in the following JSON format. Return ONLY valid JSON, no other text.
-IMPORTANT: All values MUST be written in Korean (한국어).
-
-{
-  "sessions": [
-    {
-      "session_id": "the session identifier (keep original ID as-is)",
-      "work_summary": "이 세션에서 수행한 작업을 1-2문장으로 요약 (한국어)",
-      "decisions": [
-        {
-          "what": "결정 또는 선택 분기에 대한 설명 (한국어)",
-          "why": "사용자가 이 옵션을 선택한 이유 (한국어)"
-        }
-      ],
-      "curiosities": [
-        "사용자가 궁금했거나 헷갈렸던 것 (한국어)"
-      ],
-      "corrections": [
-        {
-          "model_said": "AI가 틀리게 말한 내용 (한국어)",
-          "user_corrected": "사용자가 수정한 내용 (한국어)"
-        }
-      ]
-    }
-  ]
-}
-
-Rules:
-- Each session_id in the transcript should have its own entry in the sessions array.
-- For decisions: look for moments where the user chose between alternatives, rejected a suggestion, or stated a preference.
-- For curiosities: look for questions the user asked, concepts they wanted explained, or things they expressed uncertainty about.
-- For corrections: look for cases where the user pointed out an error in the AI's response, provided factual corrections, or disagreed with the AI's approach.
-- If a category has no items for a session, use an empty array.
-- work_summary should capture the main task or goal of the session.
-- Return ONLY the JSON object. Do not wrap it in markdown code fences.
-- ALL text values (except session_id) MUST be in Korean."#;
+// SYSTEM_PROMPT는 provider.rs로 이동했습니다 — 모든 프로바이더가 공유하는 상수입니다.
 
 // === API 요청/응답 타입 (이 모듈 내부에서만 사용) ===
 
@@ -87,7 +49,7 @@ struct ApiContentBlock {
     text: Option<String>,
 }
 
-/// Claude Messages API를 호출하여 원시 텍스트 응답을 반환합니다.
+/// Anthropic Claude Messages API를 호출하여 원시 텍스트 응답을 반환합니다.
 ///
 /// reqwest::Client는 HTTP 클라이언트입니다 — 빌더 패턴으로 요청을 구성합니다.
 /// .post(url): POST 요청 생성
@@ -95,8 +57,9 @@ struct ApiContentBlock {
 /// .json(&body): 구조체를 JSON으로 직렬화하여 요청 본문에 설정 (serde::Serialize 필요)
 /// .send().await: 비동기로 요청을 보내고 응답을 기다림
 /// .error_for_status(): HTTP 상태 코드가 4xx/5xx이면 Err로 변환
-pub async fn call_claude_api(
+pub async fn call_anthropic_api(
     api_key: &str,
+    system_prompt: &str,
     conversation_text: &str,
 ) -> Result<String, super::AnalyzerError> {
     let client = reqwest::Client::new();
@@ -104,7 +67,7 @@ pub async fn call_claude_api(
     let request_body = ApiRequest {
         model: MODEL.to_string(),
         max_tokens: 4096,
-        system: SYSTEM_PROMPT.to_string(),
+        system: system_prompt.to_string(),
         messages: vec![ApiMessage {
             role: "user".to_string(),
             content: conversation_text.to_string(),
