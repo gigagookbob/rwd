@@ -210,8 +210,63 @@ pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::Par
     Ok(entries)
 }
 
+// === 세션 요약 ===
+
+/// Codex 세션 한 개의 요약 정보.
+/// Claude Code의 SessionSummary에 대응하며, Codex 특유의 필드(cwd, model_provider)를 추가합니다.
+#[derive(Debug)]
+pub struct CodexSessionSummary {
+    pub session_id: String,
+    pub cwd: String,
+    pub model_provider: String,
+    pub user_count: usize,
+    pub assistant_count: usize,
+    pub function_call_count: usize,
+}
+
+/// 파싱된 엔트리들을 순회하여 세션 요약을 생성합니다.
+///
+/// Codex 파일은 보통 단일 세션이므로 Vec 대신 단일 구조체를 반환합니다.
+/// SessionMeta가 없는 경우 기본값으로 빈 문자열을 사용합니다.
+pub fn summarize_codex_entries(entries: &[CodexEntry]) -> CodexSessionSummary {
+    let mut summary = CodexSessionSummary {
+        session_id: String::new(),
+        cwd: String::new(),
+        model_provider: String::new(),
+        user_count: 0,
+        assistant_count: 0,
+        function_call_count: 0,
+    };
+
+    for entry in entries {
+        match entry {
+            CodexEntry::SessionMeta {
+                session_id,
+                cwd,
+                model_provider,
+                ..
+            } => {
+                // 첫 번째 SessionMeta로 세션 정보를 초기화합니다.
+                // 이미 설정된 경우에는 덮어쓰지 않습니다.
+                if summary.session_id.is_empty() {
+                    summary.session_id.clone_from(session_id);
+                    summary.cwd.clone_from(cwd);
+                    summary.model_provider.clone_from(model_provider);
+                }
+            }
+            CodexEntry::UserMessage { .. } => summary.user_count += 1,
+            CodexEntry::AssistantMessage { .. } => summary.assistant_count += 1,
+            CodexEntry::FunctionCall { .. } => summary.function_call_count += 1,
+            CodexEntry::Other => {}
+        }
+    }
+
+    summary
+}
+
 // === 단위 테스트 ===
 
+// #[cfg(test)]는 "cargo test 실행 시에만 컴파일"하라는 조건부 컴파일 속성입니다 (Rust Book Ch.11 참조).
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -366,5 +421,35 @@ mod tests {
         assert!(matches!(entries[2], CodexEntry::FunctionCall { .. }));
 
         std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    // === Task 3: 세션 요약 테스트 ===
+
+    #[test]
+    fn test_summarize_codex_entries_counts_correctly() {
+        // 다양한 엔트리 타입으로 구성된 슬라이스를 만들어 요약을 검증합니다.
+        // from_raw를 통해 실제 파싱 경로를 사용합니다.
+        let raws = vec![
+            r#"{"timestamp":"2026-03-16T09:00:00Z","type":"session_meta","payload":{"id":"sess-xyz","cwd":"/project","model_provider":"openai"}}"#,
+            r#"{"timestamp":"2026-03-16T09:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"msg1"}}"#,
+            r#"{"timestamp":"2026-03-16T09:02:00Z","type":"event_msg","payload":{"type":"user_message","message":"msg2"}}"#,
+            r#"{"timestamp":"2026-03-16T09:03:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"ok"}]}}"#,
+            r#"{"timestamp":"2026-03-16T09:04:00Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}"#,
+            r#"{"timestamp":"2026-03-16T09:05:00Z","type":"response_item","payload":{"type":"function_call","name":"write_file","arguments":"{}"}}"#,
+        ];
+
+        let entries: Vec<CodexEntry> = raws
+            .iter()
+            .map(|s| CodexEntry::from_raw(serde_json::from_str::<CodexRawEntry>(s).unwrap()))
+            .collect();
+
+        let summary = summarize_codex_entries(&entries);
+
+        assert_eq!(summary.session_id, "sess-xyz");
+        assert_eq!(summary.cwd, "/project");
+        assert_eq!(summary.model_provider, "openai");
+        assert_eq!(summary.user_count, 2);
+        assert_eq!(summary.assistant_count, 1);
+        assert_eq!(summary.function_call_count, 2);
     }
 }
