@@ -1,0 +1,206 @@
+// Codex CLI 세션 로그(.jsonl) 파서
+//
+// Codex JSONL은 Claude Code와 달리 nested payload 구조입니다.
+// 각 줄: {"timestamp": "...", "type": "...", "payload": {...}}
+// 2단계 파싱: CodexRawEntry(loose) → CodexEntry(structured)로 변환합니다.
+
+// M3(LLM 분석)에서 활용할 예정인 필드들이 있으므로 dead_code 경고를 허용합니다.
+// #![...]은 "이 모듈 전체에 속성을 적용"하는 내부 속성입니다 (#[...]은 다음 항목에만 적용).
+#![allow(dead_code)]
+
+use chrono::{DateTime, Utc};
+use serde::Deserialize;
+use std::path::PathBuf;
+
+// === 1단계: loose 파싱 타입 ===
+
+/// JSONL 한 줄의 느슨한(loose) 표현.
+/// payload를 serde_json::Value로 받아 구조 변화에 유연하게 대응합니다.
+/// 2단계에서 CodexEntry로 변환됩니다.
+#[derive(Debug, Deserialize)]
+pub struct CodexRawEntry {
+    pub timestamp: DateTime<Utc>,
+    #[serde(rename = "type")]
+    pub entry_type: String,
+    // serde(default)는 필드가 없을 때 기본값(빈 JSON 객체)을 사용합니다 (Rust Book Ch.9 참조).
+    #[serde(default)]
+    pub payload: serde_json::Value,
+}
+
+// === 2단계: 구조화된 enum 타입 ===
+
+/// Codex 세션 로그의 각 엔트리를 의미 있는 variant로 구분합니다.
+/// Claude Code의 LogEntry와 달리, Codex는 "type" 필드가 두 곳에 있어 2단계 변환이 필요합니다.
+/// - 최상위 type: 엔트리 종류 (session_meta, event_msg, response_item 등)
+/// - payload 내부 type: 세부 종류 (user_message, message, function_call 등)
+#[derive(Debug)]
+pub enum CodexEntry {
+    /// 세션 시작 메타데이터: 세션 ID, 작업 디렉토리, 모델 제공자
+    SessionMeta {
+        timestamp: DateTime<Utc>,
+        session_id: String,
+        cwd: String,
+        model_provider: String,
+    },
+    /// 사용자가 입력한 메시지
+    UserMessage {
+        timestamp: DateTime<Utc>,
+        text: String,
+    },
+    /// 어시스턴트(AI)의 텍스트 응답
+    AssistantMessage {
+        timestamp: DateTime<Utc>,
+        text: String,
+    },
+    /// AI가 호출한 함수(도구) 이름
+    FunctionCall {
+        timestamp: DateTime<Utc>,
+        name: String,
+    },
+    /// 알 수 없거나 아직 처리하지 않는 엔트리
+    Other,
+}
+
+impl CodexEntry {
+    /// CodexRawEntry를 의미 있는 CodexEntry variant로 변환합니다.
+    ///
+    /// serde_json::Value의 인덱싱(&value["key"])은 키가 없으면 Value::Null을 반환합니다.
+    /// .as_str()은 Value::String인 경우 &str을 반환하고, 아닌 경우 None을 반환합니다.
+    /// .unwrap_or_default()는 None일 때 타입의 기본값("")을 사용합니다 (Rust Book Ch.6.1 참조).
+    pub fn from_raw(raw: CodexRawEntry) -> Self {
+        let ts = raw.timestamp;
+        let payload = &raw.payload;
+
+        match raw.entry_type.as_str() {
+            "session_meta" => {
+                // payload에서 세션 ID, 작업 디렉토리, 모델 제공자를 추출합니다.
+                let session_id = payload["id"].as_str().unwrap_or_default().to_string();
+                let cwd = payload["cwd"].as_str().unwrap_or_default().to_string();
+                let model_provider = payload["model_provider"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string();
+                CodexEntry::SessionMeta {
+                    timestamp: ts,
+                    session_id,
+                    cwd,
+                    model_provider,
+                }
+            }
+            // event_msg 중 payload.type == "user_message"인 경우만 사용자 메시지로 처리합니다.
+            "event_msg" if payload["type"].as_str() == Some("user_message") => {
+                let text = payload["message"].as_str().unwrap_or_default().to_string();
+                CodexEntry::UserMessage { timestamp: ts, text }
+            }
+            // response_item 중 payload.type == "message" && role == "assistant"인 경우 어시스턴트 응답.
+            "response_item"
+                if payload["type"].as_str() == Some("message")
+                    && payload["role"].as_str() == Some("assistant") =>
+            {
+                let text = extract_codex_output_text(payload);
+                CodexEntry::AssistantMessage { timestamp: ts, text }
+            }
+            // response_item 중 payload.type == "function_call"인 경우 도구 호출.
+            "response_item" if payload["type"].as_str() == Some("function_call") => {
+                let name = payload["name"].as_str().unwrap_or_default().to_string();
+                CodexEntry::FunctionCall { timestamp: ts, name }
+            }
+            // 위의 패턴에 해당하지 않는 모든 엔트리는 Other로 처리합니다.
+            _ => CodexEntry::Other,
+        }
+    }
+}
+
+/// payload의 content 배열에서 type == "output_text"인 블록의 텍스트를 추출합니다.
+///
+/// JSON 배열을 순회하며 조건에 맞는 텍스트를 이어 붙입니다.
+/// .as_array()는 Value::Array인 경우 &Vec<Value>를 반환하고, 아닌 경우 None을 반환합니다.
+fn extract_codex_output_text(payload: &serde_json::Value) -> String {
+    let Some(content) = payload["content"].as_array() else {
+        // let-else: 패턴 매칭 실패 시 else 블록을 실행합니다 (Rust Book Ch.18 참조).
+        // 여기서는 content 배열이 없으면 빈 문자열을 반환합니다.
+        return String::new();
+    };
+
+    content
+        .iter()
+        .filter(|block| block["type"].as_str() == Some("output_text"))
+        .filter_map(|block| block["text"].as_str())
+        .collect::<Vec<_>>()
+        .join("")
+}
+
+// === 단위 테스트 (Task 1) ===
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_parse_session_meta_entry() {
+        let json = r#"{"timestamp":"2026-03-16T09:00:00Z","type":"session_meta","payload":{"id":"sess-abc","cwd":"/home/user/project","model_provider":"openai"}}"#;
+        let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
+        let entry = CodexEntry::from_raw(raw);
+
+        if let CodexEntry::SessionMeta {
+            session_id,
+            cwd,
+            model_provider,
+            ..
+        } = entry
+        {
+            assert_eq!(session_id, "sess-abc");
+            assert_eq!(cwd, "/home/user/project");
+            assert_eq!(model_provider, "openai");
+        } else {
+            panic!("Expected SessionMeta variant");
+        }
+    }
+
+    #[test]
+    fn test_parse_user_message_from_event_msg() {
+        let json = r#"{"timestamp":"2026-03-16T09:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"fix the bug"}}"#;
+        let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
+        let entry = CodexEntry::from_raw(raw);
+
+        if let CodexEntry::UserMessage { text, .. } = entry {
+            assert_eq!(text, "fix the bug");
+        } else {
+            panic!("Expected UserMessage variant");
+        }
+    }
+
+    #[test]
+    fn test_parse_assistant_message_from_response_item() {
+        let json = r#"{"timestamp":"2026-03-16T09:02:00Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Sure, I'll fix it."},{"type":"output_text","text":" Done."}]}}"#;
+        let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
+        let entry = CodexEntry::from_raw(raw);
+
+        if let CodexEntry::AssistantMessage { text, .. } = entry {
+            assert_eq!(text, "Sure, I'll fix it. Done.");
+        } else {
+            panic!("Expected AssistantMessage variant");
+        }
+    }
+
+    #[test]
+    fn test_parse_function_call_from_response_item() {
+        let json = r#"{"timestamp":"2026-03-16T09:03:00Z","type":"response_item","payload":{"type":"function_call","name":"shell","arguments":"{}"}}"#;
+        let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
+        let entry = CodexEntry::from_raw(raw);
+
+        if let CodexEntry::FunctionCall { name, .. } = entry {
+            assert_eq!(name, "shell");
+        } else {
+            panic!("Expected FunctionCall variant");
+        }
+    }
+
+    #[test]
+    fn test_parse_unknown_entry_returns_other() {
+        let json = r#"{"timestamp":"2026-03-16T09:04:00Z","type":"unknown_future_type","payload":{}}"#;
+        let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
+        let entry = CodexEntry::from_raw(raw);
+        assert!(matches!(entry, CodexEntry::Other));
+    }
+}
