@@ -140,8 +140,6 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
 
 /// Codex 엔트리들을 LLM 분석용 대화 텍스트로 변환합니다.
 /// Codex는 파일 하나가 세션 하나이므로, session_id를 외부에서 전달받습니다.
-/// Task 6-7(main.rs 통합) 전까지는 호출되지 않으므로 dead_code 경고를 허용합니다.
-#[allow(dead_code)]
 pub fn build_codex_prompt(
     entries: &[CodexEntry],
     session_id: &str,
