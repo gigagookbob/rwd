@@ -4,6 +4,7 @@
 // Text 블록만 포함하고, Thinking/ToolUse/ToolResult는 제외합니다 (너무 장황하므로).
 
 use crate::parser::claude::{ContentBlock, LogEntry};
+use crate::parser::codex::CodexEntry;
 use std::collections::HashMap;
 
 /// LogEntry 슬라이스를 받아 Claude API에 보낼 프롬프트 텍스트를 생성합니다.
@@ -137,6 +138,36 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
     texts.join("\n")
 }
 
+/// Codex 엔트리들을 LLM 분석용 대화 텍스트로 변환합니다.
+/// Codex는 파일 하나가 세션 하나이므로, session_id를 외부에서 전달받습니다.
+/// Task 6-7(main.rs 통합) 전까지는 호출되지 않으므로 dead_code 경고를 허용합니다.
+#[allow(dead_code)]
+pub fn build_codex_prompt(
+    entries: &[CodexEntry],
+    session_id: &str,
+) -> Result<String, super::AnalyzerError> {
+    let mut output = format!("[Session: {session_id}]\n");
+
+    for entry in entries {
+        match entry {
+            CodexEntry::UserMessage { text, .. } => {
+                output.push_str(&format!("[USER] {text}\n"));
+            }
+            CodexEntry::AssistantMessage { text, .. } => {
+                output.push_str(&format!("[ASSISTANT] {text}\n"));
+            }
+            _ => {}
+        }
+    }
+
+    // 세션 헤더만 있고 대화 내용이 없는 경우
+    if !output.contains("[USER]") && !output.contains("[ASSISTANT]") {
+        return Err("Codex 로그에서 대화 내용을 찾을 수 없습니다.".into());
+    }
+
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +227,32 @@ mod tests {
         let prompt = build_prompt(&entries).unwrap();
         assert!(prompt.contains("[Session: s1]"));
         assert!(prompt.contains("[Session: s2]"));
+    }
+
+    #[test]
+    fn test_build_codex_prompt_extracts_conversation() {
+        use crate::parser::codex::CodexEntry;
+        let entries = vec![
+            CodexEntry::UserMessage {
+                timestamp: "2026-03-11T10:00:00Z".parse().unwrap(),
+                text: "프로젝트 구조를 알려줘".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: "2026-03-11T10:00:30Z".parse().unwrap(),
+                text: "src/ 디렉토리를 확인했습니다".to_string(),
+            },
+        ];
+        let prompt = build_codex_prompt(&entries, "test-session").unwrap();
+        assert!(prompt.contains("[USER] 프로젝트 구조를 알려줘"));
+        assert!(prompt.contains("[ASSISTANT] src/ 디렉토리를 확인했습니다"));
+        assert!(prompt.contains("[Session: test-session]"));
+    }
+
+    #[test]
+    fn test_build_codex_prompt_empty_entries_returns_error() {
+        use crate::parser::codex::CodexEntry;
+        let entries: Vec<CodexEntry> = vec![];
+        let result = build_codex_prompt(&entries, "s1");
+        assert!(result.is_err());
     }
 }
