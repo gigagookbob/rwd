@@ -12,34 +12,24 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-/// Obsidian vault 경로를 환경 변수에서 읽습니다.
-///
-/// analyzer/mod.rs의 load_api_key()와 같은 패턴입니다:
-/// dotenvy로 .env 파일을 로드한 뒤, std::env::var()로 환경 변수를 읽습니다.
+/// Obsidian vault 경로를 설정 파일(~/.config/rwd/config.toml)에서 읽습니다.
 ///
 /// PathBuf는 소유권을 가진 경로 타입입니다 — String이 &str의 소유 버전인 것처럼,
 /// PathBuf는 &Path의 소유 버전입니다 (Rust Book Ch.12 참조).
-/// PathBuf::from()은 문자열을 OS 경로로 변환합니다.
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
-    // .env 파일이 있으면 로드, 없으면 무시 — 환경 변수가 직접 설정된 경우를 지원합니다.
-    dotenvy::dotenv().ok();
-
-    let path_str = std::env::var("RWD_VAULT_PATH").map_err(|_| {
-        "RWD_VAULT_PATH가 설정되지 않았습니다. \
-         .env 파일에 추가하거나 환경 변수를 설정해 주세요. \
-         예: echo 'RWD_VAULT_PATH=/path/to/obsidian/vault' >> .env"
+    let config = crate::config::load_config_if_exists().ok_or_else(|| {
+        let hint = if std::path::Path::new(".env").exists() {
+            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+        } else {
+            ""
+        };
+        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
     })?;
 
-    let path = PathBuf::from(&path_str);
-
-    // .exists()와 .is_dir()는 파일 시스템을 조회하여 경로 상태를 확인합니다.
+    let path = PathBuf::from(&config.output.path);
     if !path.exists() {
-        return Err(format!("Vault 경로가 존재하지 않습니다: {}", path.display()).into());
+        std::fs::create_dir_all(&path)?;
     }
-    if !path.is_dir() {
-        return Err(format!("Vault 경로가 디렉토리가 아닙니다: {}", path.display()).into());
-    }
-
     Ok(path)
 }
 
