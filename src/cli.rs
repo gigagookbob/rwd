@@ -28,4 +28,6 @@ pub enum Commands {
         /// 설정할 값
         value: String,
     },
+    /// 최신 버전으로 업데이트합니다
+    Update,
 }

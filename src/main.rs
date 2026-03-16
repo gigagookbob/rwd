@@ -5,6 +5,7 @@ mod cli;
 mod config;
 mod output;
 mod parser;
+mod update;
 
 // use 키워드로 다른 모듈의 항목을 현재 스코프로 가져옵니다.
 use clap::Parser;
@@ -43,6 +44,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Update => {
+            if let Err(e) = update::run_update().await {
+                eprintln!("업데이트 실패: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -52,6 +59,9 @@ async fn main() {
 /// 비동기 함수는 호출 시 즉시 실행되지 않고, .await를 만나야 실행됩니다.
 /// 여기서는 analyzer::analyze_entries() 호출이 네트워크 I/O를 수행하므로 async가 필요합니다.
 async fn run_today() -> Result<(), parser::ParseError> {
+    // 업데이트 알림 체크 — 실패해도 무시 (네트워크 없는 환경 대응)
+    update::notify_if_update_available().await;
+
     // 설정 파일이 없으면 init을 먼저 실행하도록 안내하고 중단합니다.
     if config::load_config_if_exists().is_none() {
         eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
