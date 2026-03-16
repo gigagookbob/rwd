@@ -117,21 +117,6 @@ fn save_analysis(analysis: &analyzer::AnalysisResult, date: chrono::NaiveDate) {
 
     let markdown = output::render_markdown(analysis, date);
 
-    // 저장할 파일 경로를 미리 계산하여 덮어쓰기 확인에 사용합니다.
-    let file_path = vault_path.join(format!("{date}.md"));
-
-    match output::confirm_overwrite(&file_path) {
-        Ok(true) => {} // 진행
-        Ok(false) => {
-            println!("저장을 건너뜁니다.");
-            return;
-        }
-        Err(e) => {
-            eprintln!("입력 읽기 실패: {e}");
-            return;
-        }
-    }
-
     match output::save_to_vault(&vault_path, date, &markdown) {
         Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
         Err(e) => eprintln!("파일 저장 실패: {e}"),
