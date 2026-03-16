@@ -19,4 +19,13 @@ pub struct Cli {
 pub enum Commands {
     /// 오늘의 세션 로그를 분석합니다
     Today,
+    /// 초기 설정을 수행합니다 (API 키, 출력 경로)
+    Init,
+    /// 설정 값을 변경합니다
+    Config {
+        /// 설정 키 (output-path, provider, api-key)
+        key: String,
+        /// 설정할 값
+        value: String,
+    },
 }
