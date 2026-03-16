@@ -1,6 +1,7 @@
 // mod 키워드로 모듈을 선언합니다.
 // Rust는 파일 하나가 모듈 하나에 대응됩니다 — cli.rs 파일이 cli 모듈이 됩니다 (Rust Book Ch.7 참조).
 mod analyzer;
+mod cache;
 mod cli;
 mod config;
 mod output;
@@ -81,6 +82,9 @@ async fn run_today() -> Result<(), parser::ParseError> {
         return Ok(());
     }
 
+    let claude_count = claude_entries.len();
+    let codex_count = codex_sessions.len();
+
     let now = chrono::Local::now();
     println!("\n=== rwd today ({}) ===", now.format("%Y-%m-%d %H:%M"));
 
@@ -110,18 +114,37 @@ async fn run_today() -> Result<(), parser::ParseError> {
         println!("총 in token: - | 총 out token: -");
     }
 
+    // === 캐시 확인 ===
+    // 엔트리 수가 동일하면 이전 분석 결과를 재사용하여 LLM 호출을 생략합니다.
+    if let Some(cached) = cache::load_cache(today) {
+        if cached.claude_entry_count == claude_count && cached.codex_session_count == codex_count {
+            println!("\n캐시된 분석 결과를 사용합니다. (엔트리 수 변경 없음)");
+            let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
+                .sources
+                .iter()
+                .map(|(name, result)| (name.as_str(), result))
+                .collect();
+            for (name, analysis) in &source_refs {
+                println!("\n=== {name} 인사이트 ===");
+                print_insights(analysis);
+            }
+            save_combined_analysis(&source_refs, today);
+            return Ok(());
+        }
+    }
+
     // === LLM 분석 ===
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
     println!("\n{provider_label} API로 인사이트 분석 중...");
 
-    let mut sources: Vec<(&str, analyzer::AnalysisResult)> = Vec::new();
+    let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
 
     // Claude 분석
     if !claude_entries.is_empty() {
         match analyzer::analyze_entries(&claude_entries).await {
-            Ok(result) => sources.push(("Claude Code", result)),
+            Ok(result) => sources.push(("Claude Code".to_string(), result)),
             Err(e) => eprintln!("Claude Code 분석 실패: {e}"),
         }
     }
@@ -134,18 +157,33 @@ async fn run_today() -> Result<(), parser::ParseError> {
             &summary.session_id
         };
         match analyzer::analyze_codex_entries(entries, &summary.session_id).await {
-            Ok(result) => sources.push(("Codex", result)),
+            Ok(result) => sources.push(("Codex".to_string(), result)),
             Err(e) => eprintln!("Codex 분석 실패 ({id_display}): {e}"),
         }
     }
 
     // 결과 출력 및 저장
     if !sources.is_empty() {
-        for (name, analysis) in &sources {
+        let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = sources
+            .iter()
+            .map(|(name, result)| (name.as_str(), result))
+            .collect();
+        for (name, analysis) in &source_refs {
             println!("\n=== {name} 인사이트 ===");
             print_insights(analysis);
         }
-        save_combined_analysis(&sources, today);
+        save_combined_analysis(&source_refs, today);
+
+        // 분석 결과를 캐시에 저장합니다.
+        let cache_data = cache::TodayCache {
+            date: today.to_string(),
+            claude_entry_count: claude_count,
+            codex_session_count: codex_count,
+            sources,
+        };
+        if let Err(e) = cache::save_cache(&cache_data, today) {
+            eprintln!("캐시 저장 실패: {e}");
+        }
     }
 
     Ok(())
@@ -276,7 +314,7 @@ fn format_number(n: u64) -> String {
 
 /// 여러 소스의 분석 결과를 결합하여 Markdown으로 저장합니다.
 fn save_combined_analysis(
-    sources: &[(&str, analyzer::AnalysisResult)],
+    sources: &[(&str, &analyzer::AnalysisResult)],
     date: chrono::NaiveDate,
 ) {
     let vault_path = match output::load_vault_path() {
@@ -287,14 +325,7 @@ fn save_combined_analysis(
         }
     };
 
-    // &[(&str, AnalysisResult)]를 &[(&str, &AnalysisResult)]로 변환합니다.
-    // render_combined_markdown은 참조 슬라이스를 받으므로, .iter()로 참조를 만들어 수집합니다.
-    let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = sources
-        .iter()
-        .map(|(name, result)| (*name, result))
-        .collect();
-
-    let markdown = output::render_combined_markdown(&source_refs, date);
+    let markdown = output::render_combined_markdown(sources, date);
 
     match output::save_to_vault(&vault_path, date, &markdown) {
         Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
