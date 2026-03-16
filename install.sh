@@ -68,9 +68,15 @@ else
     sudo mv "$EXTRACTED" "${INSTALL_DIR}/${BINARY_NAME}"
 fi
 
+# 기본 출력 디렉토리 생성 (~/.rwd/output/)
+# Obsidian vault를 설정하지 않아도 바로 사용할 수 있도록 미리 만들어 둡니다.
+DEFAULT_OUTPUT="${HOME}/.rwd/output"
+mkdir -p "$DEFAULT_OUTPUT"
+
 echo ""
 echo "rwd ${VERSION} 설치 완료!"
 echo "위치: ${INSTALL_DIR}/${BINARY_NAME}"
+echo "기본 출력 경로: ${DEFAULT_OUTPUT}"
 echo ""
 echo "시작하기:"
 echo "  rwd init     # 초기 설정 (API 키, 출력 경로)"
