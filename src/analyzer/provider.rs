@@ -86,19 +86,24 @@ impl LlmProvider {
     }
 }
 
-/// 환경 변수에서 LLM 프로바이더와 API 키를 읽습니다.
+/// 설정 파일(config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
 ///
-/// dotenvy::dotenv()로 .env 파일을 로드한 뒤,
-/// LLM_PROVIDER 환경 변수로 프로바이더를 선택합니다.
-/// 설정되지 않은 경우 기본값 "anthropic"을 사용합니다 (하위 호환성).
-///
+/// config.toml이 있으면 우선 사용하고, 없으면 기존 .env 방식으로 fallback합니다.
 /// 반환: (프로바이더, API 키) 튜플.
 /// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
+    // config.toml이 있으면 우선 사용
+    if let Some(config) = crate::config::load_config_if_exists() {
+        let provider = match config.llm.provider.as_str() {
+            "openai" => LlmProvider::OpenAi,
+            _ => LlmProvider::Anthropic,
+        };
+        return Ok((provider, config.llm.api_key));
+    }
+
+    // fallback: 기존 .env 방식
     dotenvy::dotenv().ok();
 
-    // unwrap_or_else: Result가 Err일 때 클로저를 실행하여 기본값을 생성합니다.
-    // 여기서는 LLM_PROVIDER가 없으면 "anthropic"을 기본값으로 사용합니다.
     let provider_name = std::env::var("LLM_PROVIDER")
         .unwrap_or_else(|_| "anthropic".to_string());
 
@@ -106,16 +111,14 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
         "anthropic" => {
             let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
                 "ANTHROPIC_API_KEY가 설정되지 않았습니다. \
-                 .env 파일에 추가하거나 환경 변수를 설정해 주세요. \
-                 예: echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env"
+                 `rwd init`을 실행하거나 .env 파일을 설정해 주세요."
             })?;
             Ok((LlmProvider::Anthropic, key))
         }
         "openai" => {
             let key = std::env::var("OPENAI_API_KEY").map_err(|_| {
                 "OPENAI_API_KEY가 설정되지 않았습니다. \
-                 .env 파일에 추가하거나 환경 변수를 설정해 주세요. \
-                 예: echo 'OPENAI_API_KEY=sk-...' > .env"
+                 `rwd init`을 실행하거나 .env 파일을 설정해 주세요."
             })?;
             Ok((LlmProvider::OpenAi, key))
         }
