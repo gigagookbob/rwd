@@ -66,7 +66,7 @@ pub async fn call_anthropic_api(
 
     let request_body = ApiRequest {
         model: MODEL.to_string(),
-        max_tokens: 4096,
+        max_tokens: 16384,
         system: system_prompt.to_string(),
         messages: vec![ApiMessage {
             role: "user".to_string(),
