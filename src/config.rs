@@ -67,6 +67,127 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// 설정 파일을 읽습니다. 파일이 없으면 None을 반환합니다.
+/// 호출부에서 None일 때 기존 .env fallback을 사용합니다.
+pub fn load_config_if_exists() -> Option<Config> {
+    let path = config_path().ok()?;
+    if path.exists() {
+        load_config(&path).ok()
+    } else {
+        None
+    }
+}
+
+/// rwd init 실행 — API 키를 입력받고, 출력 경로를 자동 감지하여 설정 파일에 저장합니다.
+///
+/// eprint!는 stderr로 프롬프트를 출력합니다 — stdout은 데이터 출력용으로 분리합니다.
+/// stdin().read_line()은 사용자 입력을 한 줄 읽습니다 (Rust Book Ch.2 참조).
+pub fn run_init() -> Result<(), ConfigError> {
+    let config_file = config_path()?;
+
+    // 기존 .env 파일이 있으면 마이그레이션 안내
+    let cwd_env = std::path::Path::new(".env");
+    if cwd_env.exists() {
+        eprintln!("기존 .env 파일이 감지되었습니다.");
+        eprintln!("rwd init 완료 후 .env 파일은 더 이상 사용되지 않습니다.");
+        eprintln!("설정은 ~/.config/rwd/config.toml에서 관리됩니다.\n");
+    }
+
+    // 프로바이더 선택
+    eprint!("LLM 프로바이더를 선택하세요 (anthropic/openai) [anthropic]: ");
+    let mut provider_input = String::new();
+    std::io::stdin().read_line(&mut provider_input)?;
+    let provider = provider_input.trim();
+    let provider = if provider.is_empty() { "anthropic" } else { provider };
+
+    // 프로바이더 검증
+    if !["anthropic", "openai"].contains(&provider) {
+        return Err(format!("지원하지 않는 프로바이더: {provider}").into());
+    }
+
+    // API 키 입력
+    let key_prompt = match provider {
+        "anthropic" => "Anthropic API 키를 입력하세요: ",
+        "openai" => "OpenAI API 키를 입력하세요: ",
+        _ => unreachable!(),
+    };
+    eprint!("{key_prompt}");
+    let mut api_key = String::new();
+    std::io::stdin().read_line(&mut api_key)?;
+    let api_key = api_key.trim().to_string();
+
+    if api_key.is_empty() {
+        return Err("API 키가 비어있습니다.".into());
+    }
+
+    // 출력 경로 자동 감지
+    let output_path = default_output_path();
+    match detect_obsidian_vault() {
+        Some(vault) => {
+            eprintln!("Obsidian vault 감지됨: {}", vault.display());
+            eprintln!("출력 경로: {}/Daily/", output_path.display());
+        }
+        None => {
+            eprintln!("Obsidian vault를 찾지 못했습니다.");
+            eprintln!("기본 출력 경로: {}/Daily/", output_path.display());
+        }
+    }
+
+    let config = Config {
+        llm: LlmConfig {
+            provider: provider.to_string(),
+            api_key,
+        },
+        output: OutputConfig {
+            path: output_path.to_string_lossy().to_string(),
+        },
+    };
+
+    save_config(&config, &config_file)?;
+    eprintln!("설정 저장 완료: {}", config_file.display());
+    Ok(())
+}
+
+/// rwd config <key> <value> — 개별 설정 값을 변경합니다.
+/// 기존 설정 파일을 읽고, 해당 키만 수정한 뒤 다시 저장합니다.
+pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
+    let config_file = config_path()?;
+
+    if !config_file.exists() {
+        return Err("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.".into());
+    }
+
+    let mut config = load_config(&config_file)?;
+
+    match key {
+        "output-path" => {
+            config.output.path = value.to_string();
+            eprintln!("출력 경로 변경: {value}");
+        }
+        "provider" => {
+            if !["anthropic", "openai"].contains(&value) {
+                return Err(format!(
+                    "지원하지 않는 프로바이더: '{value}'. 사용 가능: anthropic, openai"
+                ).into());
+            }
+            config.llm.provider = value.to_string();
+            eprintln!("LLM 프로바이더 변경: {value}");
+        }
+        "api-key" => {
+            config.llm.api_key = value.to_string();
+            eprintln!("API 키 변경 완료");
+        }
+        _ => {
+            return Err(format!(
+                "알 수 없는 설정 키: '{key}'. 사용 가능: output-path, provider, api-key"
+            ).into());
+        }
+    }
+
+    save_config(&config, &config_file)?;
+    Ok(())
+}
+
 /// 주어진 디렉토리 하위에서 .obsidian 폴더가 있는 디렉토리를 찾습니다.
 /// .obsidian 폴더는 Obsidian이 vault로 인식하는 마커입니다.
 /// read_dir()로 1단계 깊이만 탐색합니다 — 깊은 중첩은 불필요합니다.

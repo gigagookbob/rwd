@@ -31,6 +31,18 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Init => {
+            if let Err(e) = config::run_init() {
+                eprintln!("초기 설정 실패: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Config { key, value } => {
+            if let Err(e) = config::run_config(&key, &value) {
+                eprintln!("설정 변경 실패: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
