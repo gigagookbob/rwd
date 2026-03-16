@@ -17,14 +17,8 @@ use chrono::NaiveDate;
 /// PathBuf는 소유권을 가진 경로 타입입니다 — String이 &str의 소유 버전인 것처럼,
 /// PathBuf는 &Path의 소유 버전입니다 (Rust Book Ch.12 참조).
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
-    let config = crate::config::load_config_if_exists().ok_or_else(|| {
-        let hint = if std::path::Path::new(".env").exists() {
-            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
-        } else {
-            ""
-        };
-        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
-    })?;
+    let config = crate::config::load_config_if_exists()
+        .ok_or("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.")?;
 
     let path = PathBuf::from(&config.output.path);
     if !path.exists() {

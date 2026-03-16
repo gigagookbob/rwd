@@ -85,14 +85,6 @@ pub fn load_config_if_exists() -> Option<Config> {
 pub fn run_init() -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
-    // 기존 .env 파일이 있으면 마이그레이션 안내
-    let cwd_env = std::path::Path::new(".env");
-    if cwd_env.exists() {
-        eprintln!("기존 .env 파일이 감지되었습니다.");
-        eprintln!("rwd init 완료 후 .env 파일은 더 이상 사용되지 않습니다.");
-        eprintln!("설정은 ~/.config/rwd/config.toml에서 관리됩니다.\n");
-    }
-
     // 프로바이더 선택
     eprint!("LLM 프로바이더를 선택하세요 (anthropic/openai) [anthropic]: ");
     let mut provider_input = String::new();
@@ -105,20 +97,27 @@ pub fn run_init() -> Result<(), ConfigError> {
         return Err(format!("지원하지 않는 프로바이더: {provider}").into());
     }
 
-    // API 키 입력
+    // API 키 입력 — rpassword로 마스킹 (터미널에 입력이 보이지 않음)
     let key_prompt = match provider {
         "anthropic" => "Anthropic API 키를 입력하세요: ",
         "openai" => "OpenAI API 키를 입력하세요: ",
         _ => unreachable!(),
     };
-    eprint!("{key_prompt}");
-    let mut api_key = String::new();
-    std::io::stdin().read_line(&mut api_key)?;
+    let api_key = rpassword::prompt_password(key_prompt)
+        .map_err(|e| format!("API 키 입력 실패: {e}"))?;
     let api_key = api_key.trim().to_string();
 
     if api_key.is_empty() {
         return Err("API 키가 비어있습니다.".into());
     }
+
+    // 마스킹된 키 표시 (앞 8자만 보여주고 나머지는 ***)
+    let masked = if api_key.len() > 8 {
+        format!("{}***", &api_key[..8])
+    } else {
+        "***".to_string()
+    };
+    eprintln!("API 키 설정됨: {masked}");
 
     // 출력 경로 자동 감지
     let output_path = default_output_path();
@@ -175,7 +174,12 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
         }
         "api-key" => {
             config.llm.api_key = value.to_string();
-            eprintln!("API 키 변경 완료");
+            let masked = if value.len() > 8 {
+                format!("{}***", &value[..8])
+            } else {
+                "***".to_string()
+            };
+            eprintln!("API 키 변경됨: {masked}");
         }
         _ => {
             return Err(format!(
