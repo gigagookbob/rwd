@@ -6,7 +6,7 @@ pub mod markdown;
 // M5에서 thiserror로 전용 에러 타입을 만들 예정입니다.
 pub type OutputError = Box<dyn std::error::Error>;
 
-pub use markdown::render_markdown;
+pub use markdown::render_combined_markdown;
 
 use std::path::{Path, PathBuf};
 
