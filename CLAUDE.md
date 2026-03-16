@@ -1,6 +1,6 @@
 # AGENTS.md — rwd (rewind)
 
-AI 코딩 세션 로그를 분석하여 일일 개발 인사이트를 추출하고, Obsidian vault에 Markdown으로 저장하는 Rust CLI 도구.
+AI Agent 세션 로그를 분석하여 일일 개발 인사이트를 추출하고, Obsidian vault에 Markdown으로 저장하는 Rust CLI 도구.
 
 ## Technical Constraints
 

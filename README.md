@@ -1,6 +1,6 @@
 # rwd (rewind)
 
-AI 코딩 세션 로그를 분석하여 일일 개발 인사이트를 추출하고, Obsidian vault에 Markdown으로 저장하는 CLI 도구.
+AI Agent 세션 로그를 분석하여 일일 개발 인사이트를 추출하고, Obsidian vault에 Markdown으로 저장하는 CLI 도구.
 
 ## rwd vs Claude Code `/insights`
 
@@ -57,7 +57,7 @@ rwd config api-key sk-...                # API 키 변경
 ## 사용법
 
 ```bash
-# 오늘의 AI 코딩 세션 분석
+# 오늘의 AI Agent 세션 분석
 rwd today
 ```
 
