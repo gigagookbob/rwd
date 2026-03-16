@@ -51,6 +51,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Summary => {
+            if let Err(e) = run_summary().await {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -116,21 +122,23 @@ async fn run_today() -> Result<(), parser::ParseError> {
 
     // === 캐시 확인 ===
     // 엔트리 수가 동일하면 이전 분석 결과를 재사용하여 LLM 호출을 생략합니다.
-    if let Some(cached) = cache::load_cache(today) {
-        if cached.claude_entry_count == claude_count && cached.codex_session_count == codex_count {
-            println!("\n캐시된 분석 결과를 사용합니다. (엔트리 수 변경 없음)");
-            let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
-                .sources
-                .iter()
-                .map(|(name, result)| (name.as_str(), result))
-                .collect();
-            for (name, analysis) in &source_refs {
-                println!("\n=== {name} 인사이트 ===");
-                print_insights(analysis);
-            }
-            save_combined_analysis(&source_refs, today);
-            return Ok(());
+    // Rust 2024 Edition의 let chains를 사용하여 두 조건을 하나의 if로 합칩니다.
+    if let Some(cached) = cache::load_cache(today)
+        && cached.claude_entry_count == claude_count
+        && cached.codex_session_count == codex_count
+    {
+        println!("\n캐시된 분석 결과를 사용합니다. (엔트리 수 변경 없음)");
+        let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
+            .sources
+            .iter()
+            .map(|(name, result)| (name.as_str(), result))
+            .collect();
+        for (name, analysis) in &source_refs {
+            println!("\n=== {name} 인사이트 ===");
+            print_insights(analysis);
         }
+        save_combined_analysis(&source_refs, today);
+        return Ok(());
     }
 
     // === LLM 분석 ===
@@ -187,6 +195,122 @@ async fn run_today() -> Result<(), parser::ParseError> {
     }
 
     Ok(())
+}
+
+/// 오늘의 개발 진척사항 요약을 생성합니다.
+///
+/// 1. 오늘 캐시를 로드합니다. 없으면 run_today()를 실행한 후 다시 로드합니다.
+/// 2. 캐시의 모든 세션 work_summary를 모아서 LLM에 전달합니다.
+/// 3. 생성된 요약을 터미널에 출력하고, Daily Markdown 파일에 추가하며, 클립보드에 복사합니다.
+async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
+    let today = chrono::Local::now().date_naive();
+
+    // 캐시가 없으면 today 분석을 먼저 실행합니다.
+    let cached = match cache::load_cache(today) {
+        Some(c) => c,
+        None => {
+            println!("캐시가 없습니다. today 분석을 먼저 실행합니다...");
+            run_today().await?;
+            match cache::load_cache(today) {
+                Some(c) => c,
+                None => {
+                    eprintln!("분석 후에도 캐시를 찾을 수 없습니다.");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    // 모든 세션 work_summary를 하나의 텍스트로 합칩니다.
+    // 소스 이름과 세션 요약을 함께 제공하여 LLM이 프로젝트별로 그룹화할 수 있도록 합니다.
+    let mut summaries_text = String::new();
+    for (source_name, analysis) in &cached.sources {
+        for session in &analysis.sessions {
+            summaries_text.push_str(&format!(
+                "[{source_name} / {}] {}\n",
+                session.session_id, session.work_summary
+            ));
+        }
+    }
+
+    if summaries_text.is_empty() {
+        println!("요약할 세션이 없습니다.");
+        return Ok(());
+    }
+
+    println!("개발 진척사항 요약 생성 중...");
+    let summary = analyzer::analyze_summary(&summaries_text).await?;
+
+    println!("\n=== 개발 진척사항 ===");
+    println!("{summary}");
+
+    // Daily Markdown 파일에 요약 섹션을 추가합니다.
+    append_summary_to_markdown(today, &summary);
+
+    // 클립보드에 복사합니다.
+    copy_to_clipboard(&summary);
+    println!("\n클립보드에 복사되었습니다.");
+
+    Ok(())
+}
+
+/// 텍스트를 시스템 클립보드에 복사합니다.
+/// macOS: pbcopy, Linux: xclip 사용.
+///
+/// std::process::Command로 외부 프로세스를 실행합니다 (Rust Book Ch.12 참조).
+/// Stdio::piped()는 stdin을 파이프로 연결하여 데이터를 전달할 수 있게 합니다.
+fn copy_to_clipboard(text: &str) {
+    use std::io::Write;
+    use std::process::{Command, Stdio};
+
+    let mut cmd = if cfg!(target_os = "macos") {
+        Command::new("pbcopy")
+    } else {
+        let mut c = Command::new("xclip");
+        c.arg("-selection").arg("clipboard");
+        c
+    };
+
+    if let Ok(mut child) = cmd.stdin(Stdio::piped()).spawn() {
+        if let Some(stdin) = child.stdin.as_mut() {
+            let _ = stdin.write_all(text.as_bytes());
+        }
+        let _ = child.wait();
+    }
+}
+
+/// 기존 Daily Markdown 파일에 `## 개발 진척사항` 섹션을 추가합니다.
+///
+/// std::fs::OpenOptions::new().append(true)는 파일을 덮어쓰지 않고 끝에 추가합니다 (Rust Book Ch.12 참조).
+fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
+    use std::io::Write;
+
+    let vault_path = match output::load_vault_path() {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("Vault 경로 로드 실패: {e}");
+            return;
+        }
+    };
+
+    let file_path = vault_path.join("Daily").join(format!("{date}.md"));
+    if !file_path.exists() {
+        eprintln!("Daily Markdown 파일이 없습니다: {}", file_path.display());
+        return;
+    }
+
+    let content = format!("\n## 개발 진척사항\n\n{summary}\n");
+
+    match std::fs::OpenOptions::new().append(true).open(&file_path) {
+        Ok(mut file) => {
+            if let Err(e) = file.write_all(content.as_bytes()) {
+                eprintln!("Markdown 추가 실패: {e}");
+            } else {
+                println!("Markdown에 추가 완료: {}", file_path.display());
+            }
+        }
+        Err(e) => eprintln!("파일 열기 실패: {e}"),
+    }
 }
 
 /// Claude Code 로그를 수집합니다. 디렉토리가 없으면 빈 Vec을 반환합니다.
