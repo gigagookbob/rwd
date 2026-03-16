@@ -82,7 +82,7 @@ pub async fn call_openai_api(
                 content: conversation_text.to_string(),
             },
         ],
-        max_tokens: 4096,
+        max_tokens: 16384,
     };
 
     // Authorization: Bearer 헤더 — OpenAI의 인증 방식입니다.
