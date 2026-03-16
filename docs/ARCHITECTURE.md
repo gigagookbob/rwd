@@ -31,9 +31,12 @@ CLI 진입 → 로그 파일 탐색/수집 → JSONL 파싱 & 구조화 → LLM 
 - 로그 위치: `~/.claude/projects/` 하위 JSONL 파일
 - 형식: 각 줄이 독립된 JSON 객체
 
-### Codex (추후 확장)
+### Codex
 
-- 로그 위치 및 형식 파악 필요
+- 로그 위치: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+- 형식: 각 줄이 `{"timestamp", "type", "payload"}` 구조의 JSON 객체
+- 엔트리 타입: session_meta, response_item, event_msg, turn_context
+- 파서: 2단계 변환 (CodexRawEntry → CodexEntry)
 
 ## 프로젝트 구조
 
@@ -51,7 +54,8 @@ rwd/
 │   ├── cli.rs             # clap 기반 CLI 정의
 │   ├── parser/            # 로그 파싱 모듈
 │   │   ├── mod.rs
-│   │   └── claude.rs      # Claude Code 로그 파서
+│   │   ├── claude.rs      # Claude Code 로그 파서
+│   │   └── codex.rs       # Codex 로그 파서
 │   ├── analyzer/          # 구조화된 데이터 → LLM 인사이트 추출
 │   │   ├── mod.rs         # 오케스트레이터
 │   │   ├── provider.rs    # LlmProvider enum, 프로바이더 선택
