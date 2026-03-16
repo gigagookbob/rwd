@@ -81,23 +81,31 @@ async fn run_today() -> Result<(), parser::ParseError> {
         return Ok(());
     }
 
+    let now = chrono::Local::now();
+
     // === Claude Code 요약 출력 ===
     if !claude_entries.is_empty() {
         let summaries = parser::summarize_entries(&claude_entries);
-        println!("\n=== Claude Code ({today}) ===");
-        println!("Sessions: {}", summaries.len());
-        for s in &summaries {
-            print_claude_summary(s);
-        }
+        let earliest = claude_earliest_time(&claude_entries);
+        let time_range = format_time_range(earliest, now);
+
+        println!("\nClaude Code");
+        println!("{time_range}");
+        println!("총 세션: {}", summaries.len());
+
+        let (total_in, total_out) = claude_total_tokens(&summaries);
+        println!("총 in token: {} | 총 out token: {}", format_number(total_in), format_number(total_out));
     }
 
     // === Codex 요약 출력 ===
     if !codex_sessions.is_empty() {
-        println!("\n=== Codex ({today}) ===");
-        println!("Sessions: {}", codex_sessions.len());
-        for (summary, _) in &codex_sessions {
-            print_codex_summary(summary);
-        }
+        let earliest = codex_earliest_time(&codex_sessions);
+        let time_range = format_time_range(earliest, now);
+
+        println!("\nCodex");
+        println!("{time_range}");
+        println!("총 세션: {}", codex_sessions.len());
+        println!("총 in token: - | 총 out token: -");
     }
 
     // === LLM 분석 ===
@@ -203,28 +211,65 @@ fn collect_codex_sessions(
     sessions
 }
 
-fn print_claude_summary(s: &parser::claude::SessionSummary) {
-    let total_in = s.total_input_tokens
-        + s.total_cache_creation_tokens
-        + s.total_cache_read_tokens;
-    println!("\nSession: {}...", &s.session_id[..8]);
-    println!("  User messages:      {}", s.user_count);
-    println!("  Assistant messages:  {}", s.assistant_count);
-    println!("  Tool uses:          {}", s.tool_use_count);
-    println!("  Tokens (in/out):    {}/{}", total_in, s.total_output_tokens);
+/// Claude 엔트리들에서 가장 이른 로컬 타임스탬프를 찾습니다.
+fn claude_earliest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::DateTime<chrono::Local>> {
+    entries
+        .iter()
+        .filter_map(parser::claude::entry_timestamp)
+        .min()
+        .map(|ts| ts.with_timezone(&chrono::Local))
 }
 
-fn print_codex_summary(s: &parser::codex::CodexSessionSummary) {
-    let id_display = if s.session_id.len() >= 8 {
-        &s.session_id[..8]
-    } else {
-        &s.session_id
-    };
-    println!("\nSession: {id_display}...");
-    println!("  Project:            {}", s.cwd);
-    println!("  User messages:      {}", s.user_count);
-    println!("  Assistant messages:  {}", s.assistant_count);
-    println!("  Function calls:     {}", s.function_call_count);
+/// Codex 세션들에서 가장 이른 로컬 타임스탬프를 찾습니다.
+fn codex_earliest_time(
+    sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+) -> Option<chrono::DateTime<chrono::Local>> {
+    sessions
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .filter_map(|e| match e {
+            parser::codex::CodexEntry::SessionMeta { timestamp, .. }
+            | parser::codex::CodexEntry::UserMessage { timestamp, .. }
+            | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
+            | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
+            parser::codex::CodexEntry::Other => None,
+        })
+        .min()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
+/// Claude 세션 요약들의 총 토큰 수를 계산합니다. (total_in, total_out)
+fn claude_total_tokens(summaries: &[parser::claude::SessionSummary]) -> (u64, u64) {
+    summaries.iter().fold((0, 0), |(acc_in, acc_out), s| {
+        let total_in = s.total_input_tokens
+            + s.total_cache_creation_tokens
+            + s.total_cache_read_tokens;
+        (acc_in + total_in, acc_out + s.total_output_tokens)
+    })
+}
+
+/// 시간 범위를 "HH:MM ~ HH:MM" 형식으로 포매팅합니다.
+fn format_time_range(
+    earliest: Option<chrono::DateTime<chrono::Local>>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    match earliest {
+        Some(start) => format!("{} ~ {}", start.format("%H:%M"), now.format("%H:%M")),
+        None => format!("? ~ {}", now.format("%H:%M")),
+    }
+}
+
+/// 숫자를 천 단위 콤마로 포매팅합니다.
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
 }
 
 /// 여러 소스의 분석 결과를 결합하여 Markdown으로 저장합니다.
