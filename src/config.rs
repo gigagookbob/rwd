@@ -188,6 +188,36 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     Ok(())
 }
 
+/// Obsidian 앱의 설정 파일(obsidian.json)에서 vault 경로를 읽습니다.
+/// macOS: ~/Library/Application Support/obsidian/obsidian.json
+///
+/// obsidian.json 형식: {"vaults":{"id":{"path":"/path/to/vault","ts":...,"open":true}}}
+/// serde_json::Value로 동적 파싱합니다 — 구조가 바뀌어도 유연하게 대응합니다.
+fn detect_vault_from_obsidian_json() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let json_path = home
+        .join("Library")
+        .join("Application Support")
+        .join("obsidian")
+        .join("obsidian.json");
+
+    let content = std::fs::read_to_string(&json_path).ok()?;
+    let json: serde_json::Value = serde_json::from_str(&content).ok()?;
+
+    // vaults 객체에서 첫 번째 vault의 path를 추출합니다.
+    // as_object()는 JSON 값을 Map으로 변환 — None이면 해당 키가 없거나 객체가 아닌 것입니다.
+    let vaults = json.get("vaults")?.as_object()?;
+    for (_id, vault_info) in vaults {
+        if let Some(path_str) = vault_info.get("path").and_then(|v| v.as_str()) {
+            let path = PathBuf::from(path_str);
+            if path.exists() {
+                return Some(path);
+            }
+        }
+    }
+    None
+}
+
 /// 주어진 디렉토리 하위에서 .obsidian 폴더가 있는 디렉토리를 찾습니다.
 /// .obsidian 폴더는 Obsidian이 vault로 인식하는 마커입니다.
 /// read_dir()로 1단계 깊이만 탐색합니다 — 깊은 중첩은 불필요합니다.
@@ -203,21 +233,36 @@ pub fn detect_vault_in_dir(search_dir: &std::path::Path) -> Option<PathBuf> {
 }
 
 /// Obsidian vault를 자동 감지합니다.
-/// ~/Documents/Obsidian/ 하위에서 .obsidian 마커를 탐색합니다.
+/// 1순위: obsidian.json에서 vault 경로 읽기 (가장 정확)
+/// 2순위: ~/Documents/Obsidian/ 하위에서 .obsidian 마커 탐색 (fallback)
 /// 찾지 못하면 None 반환 — 호출부에서 기본 경로를 사용합니다.
 pub fn detect_obsidian_vault() -> Option<PathBuf> {
+    // 1순위: Obsidian 앱 설정에서 직접 읽기
+    if let Some(vault) = detect_vault_from_obsidian_json() {
+        return Some(vault);
+    }
+
+    // 2순위: .obsidian 마커 기반 탐색
     let home = dirs::home_dir()?;
     let obsidian_dir = home.join("Documents").join("Obsidian");
     detect_vault_in_dir(&obsidian_dir)
 }
 
 /// 기본 출력 경로(vault root)를 결정합니다.
-/// 1. Obsidian vault 자동 감지 → {vault} (vault root 반환)
+/// 1. Obsidian vault 자동 감지 → vault root 반환
 /// 2. 감지 실패 → ~/.rwd/output (기본 경로)
 ///
 /// 주의: Daily/ 하위 디렉토리는 save_to_vault()가 자동으로 붙입니다.
+/// Obsidian에서 vault가 "Daily" 폴더로 등록된 경우, 부모를 vault root로 사용합니다.
 pub fn default_output_path() -> PathBuf {
     if let Some(vault) = detect_obsidian_vault() {
+        // vault가 "Daily"로 끝나면 부모가 실제 vault root
+        // (Obsidian에서 Daily 폴더를 vault로 등록한 경우)
+        if vault.file_name().and_then(|n| n.to_str()) == Some("Daily")
+            && let Some(parent) = vault.parent()
+        {
+            return parent.to_path_buf();
+        }
         return vault;
     }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
