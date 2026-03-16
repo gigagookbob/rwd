@@ -82,6 +82,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
     }
 
     let now = chrono::Local::now();
+    println!("\n=== rwd today ({}) ===", now.format("%Y-%m-%d %H:%M"));
 
     // === Claude Code 요약 출력 ===
     if !claude_entries.is_empty() {
