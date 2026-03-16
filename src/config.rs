@@ -67,6 +67,42 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+/// 주어진 디렉토리 하위에서 .obsidian 폴더가 있는 디렉토리를 찾습니다.
+/// .obsidian 폴더는 Obsidian이 vault로 인식하는 마커입니다.
+/// read_dir()로 1단계 깊이만 탐색합니다 — 깊은 중첩은 불필요합니다.
+pub fn detect_vault_in_dir(search_dir: &std::path::Path) -> Option<PathBuf> {
+    let entries = std::fs::read_dir(search_dir).ok()?;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() && path.join(".obsidian").is_dir() {
+            return Some(path);
+        }
+    }
+    None
+}
+
+/// Obsidian vault를 자동 감지합니다.
+/// ~/Documents/Obsidian/ 하위에서 .obsidian 마커를 탐색합니다.
+/// 찾지 못하면 None 반환 — 호출부에서 기본 경로를 사용합니다.
+pub fn detect_obsidian_vault() -> Option<PathBuf> {
+    let home = dirs::home_dir()?;
+    let obsidian_dir = home.join("Documents").join("Obsidian");
+    detect_vault_in_dir(&obsidian_dir)
+}
+
+/// 기본 출력 경로(vault root)를 결정합니다.
+/// 1. Obsidian vault 자동 감지 → {vault} (vault root 반환)
+/// 2. 감지 실패 → ~/.rwd/output (기본 경로)
+///
+/// 주의: Daily/ 하위 디렉토리는 save_to_vault()가 자동으로 붙입니다.
+pub fn default_output_path() -> PathBuf {
+    if let Some(vault) = detect_obsidian_vault() {
+        return vault;
+    }
+    let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
+    home.join(".rwd").join("output")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -100,6 +136,33 @@ mod tests {
         assert_eq!(loaded.llm.provider, "anthropic");
         assert_eq!(loaded.llm.api_key, "sk-test-key");
         assert_eq!(loaded.output.path, "/tmp/vault");
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_detect_obsidian_vault_obsidian폴더_있으면_경로반환() {
+        let temp_dir = std::env::temp_dir().join("rwd_test_vault_detect");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        let vault_dir = temp_dir.join("TestVault");
+        let obsidian_marker = vault_dir.join(".obsidian");
+        std::fs::create_dir_all(&obsidian_marker).expect("디렉토리 생성");
+
+        let result = detect_vault_in_dir(&temp_dir);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), vault_dir);
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_detect_obsidian_vault_없으면_None() {
+        let temp_dir = std::env::temp_dir().join("rwd_test_no_vault");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+
+        let result = detect_vault_in_dir(&temp_dir);
+        assert!(result.is_none());
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
