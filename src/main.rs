@@ -279,12 +279,11 @@ fn copy_to_clipboard(text: &str) {
     }
 }
 
-/// 기존 Daily Markdown 파일에 `## 개발 진척사항` 섹션을 추가합니다.
+/// 기존 Daily Markdown 파일에 `## 개발 진척사항` 섹션을 덮어쓰거나 추가합니다.
 ///
-/// std::fs::OpenOptions::new().append(true)는 파일을 덮어쓰지 않고 끝에 추가합니다 (Rust Book Ch.12 참조).
+/// 기존 섹션이 있으면 해당 섹션만 교체하고, 없으면 파일 끝에 추가합니다.
+/// 섹션의 범위: `## 개발 진척사항`부터 다음 `## ` 헤더(또는 파일 끝)까지.
 fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
-    use std::io::Write;
-
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
         Err(e) => {
@@ -299,17 +298,36 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
         return;
     }
 
-    let content = format!("\n## 개발 진척사항\n\n{summary}\n");
-
-    match std::fs::OpenOptions::new().append(true).open(&file_path) {
-        Ok(mut file) => {
-            if let Err(e) = file.write_all(content.as_bytes()) {
-                eprintln!("Markdown 추가 실패: {e}");
-            } else {
-                println!("Markdown에 추가 완료: {}", file_path.display());
-            }
+    let existing = match std::fs::read_to_string(&file_path) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("파일 읽기 실패: {e}");
+            return;
         }
-        Err(e) => eprintln!("파일 열기 실패: {e}"),
+    };
+
+    let section_header = "## 개발 진척사항";
+    let new_section = format!("{section_header}\n\n{summary}\n");
+
+    // 기존 섹션이 있으면 교체, 없으면 끝에 추가합니다.
+    // .find()는 패턴의 시작 바이트 위치를 반환합니다 (Rust Book Ch.8 참조).
+    let updated = if let Some(start) = existing.find(section_header) {
+        // 섹션 끝: 다음 "## " 헤더의 시작 위치 또는 파일 끝.
+        // start 이후부터 탐색하되, 헤더 자체는 건너뜁니다.
+        let after_header = start + section_header.len();
+        let end = existing[after_header..]
+            .find("\n## ")
+            .map(|pos| after_header + pos + 1) // +1: 개행 문자 다음에 ## 이 오도록
+            .unwrap_or(existing.len());
+
+        format!("{}{}\n{}", &existing[..start], new_section, &existing[end..])
+    } else {
+        format!("{}\n{}\n", existing.trim_end(), new_section)
+    };
+
+    match std::fs::write(&file_path, updated) {
+        Ok(()) => println!("Markdown 저장 완료: {}", file_path.display()),
+        Err(e) => eprintln!("파일 저장 실패: {e}"),
     }
 }
 
