@@ -182,6 +182,38 @@ pub fn list_session_files_for_date(
     Ok(files)
 }
 
+/// 로컬 타임존 기준 날짜에 해당하는 Codex 세션 파일들을 반환합니다.
+///
+/// Codex 디렉토리 구조(YYYY/MM/DD)가 UTC 기준일 수 있으므로,
+/// 타임존 오프셋을 고려하여 전날 디렉토리도 함께 스캔합니다.
+/// 예: KST 2026-03-16 00:00 = UTC 2026-03-15 15:00 → 03/15 디렉토리도 확인
+pub fn list_session_files_for_local_date(
+    sessions_dir: &Path,
+    local_date: NaiveDate,
+) -> Result<Vec<PathBuf>, super::ParseError> {
+    let mut files = Vec::new();
+    // chrono::Duration::days()는 일 단위의 기간을 생성합니다 (Rust Book Ch.10 참조).
+    let yesterday = local_date - chrono::Duration::days(1);
+    for date in [yesterday, local_date] {
+        files.extend(list_session_files_for_date(sessions_dir, date)?);
+    }
+    Ok(files)
+}
+
+/// CodexEntry에서 timestamp를 추출하는 헬퍼 함수.
+/// 세션의 로컬 날짜 필터링에 사용합니다.
+pub fn entry_local_date(entry: &CodexEntry) -> Option<NaiveDate> {
+    let ts = match entry {
+        CodexEntry::SessionMeta { timestamp, .. }
+        | CodexEntry::UserMessage { timestamp, .. }
+        | CodexEntry::AssistantMessage { timestamp, .. }
+        | CodexEntry::FunctionCall { timestamp, .. } => *timestamp,
+        CodexEntry::Other => return None,
+    };
+    // UTC 타임스탬프를 시스템 로컬 타임존으로 변환하여 날짜를 추출합니다.
+    Some(ts.with_timezone(&chrono::Local).date_naive())
+}
+
 /// JSONL 파일을 읽어 CodexEntry 벡터로 변환합니다.
 ///
 /// 파싱에 실패한 줄은 건너뛰고 eprintln으로 경고합니다.
