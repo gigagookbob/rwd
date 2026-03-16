@@ -52,41 +52,21 @@ pub fn save_to_vault(
     date: NaiveDate,
     content: &str,
 ) -> Result<PathBuf, OutputError> {
+    // Obsidian Daily Notes 플러그인은 "Daily/" 하위 폴더를 참조합니다.
+    // create_dir_all()은 경로의 모든 중간 디렉토리를 재귀적으로 생성합니다 —
+    // 이미 존재하면 에러 없이 넘어갑니다 (Rust Book Ch.12 참조).
+    let daily_dir = vault_path.join("Daily");
+    std::fs::create_dir_all(&daily_dir)?;
+
     // 파일명: "2026-03-11.md" — NaiveDate의 Display 트레이트가 "YYYY-MM-DD" 형식을 제공합니다.
     let filename = format!("{date}.md");
-    // .join()은 OS에 맞는 경로 구분자로 결합합니다 (Windows: \, Unix: /).
-    let file_path = vault_path.join(&filename);
+    let file_path = daily_dir.join(&filename);
 
     std::fs::write(&file_path, content)?;
 
     Ok(file_path)
 }
 
-/// 파일이 이미 존재할 때 사용자에게 덮어쓸지 확인합니다.
-///
-/// std::io::stdin().read_line()은 사용자의 키보드 입력을 한 줄 읽습니다 (Rust Book Ch.2 참조).
-/// &mut input은 가변 참조로, read_line이 input 변수에 입력 내용을 기록할 수 있게 합니다.
-/// 반환값 Result<usize, io::Error>에서 usize는 읽은 바이트 수입니다.
-pub fn confirm_overwrite(path: &Path) -> Result<bool, OutputError> {
-    // 파일이 없으면 확인 불필요 — 바로 저장 진행
-    if !path.exists() {
-        return Ok(true);
-    }
-
-    // eprintln!은 stderr에 출력합니다 — 프롬프트 메시지는 데이터 출력(stdout)과 분리하는 것이 CLI 관례입니다.
-    eprint!(
-        "파일이 이미 존재합니다: {}\n덮어쓰시겠습니까? (y/N): ",
-        path.display()
-    );
-
-    let mut input = String::new();
-    std::io::stdin().read_line(&mut input)?;
-
-    // .trim()은 양끝 공백과 개행 문자를 제거합니다.
-    // .to_lowercase()는 대소문자를 통일하여 "Y", "y", "YES" 등을 모두 처리합니다.
-    let answer = input.trim().to_lowercase();
-    Ok(answer == "y" || answer == "yes")
-}
 
 #[cfg(test)]
 mod tests {
@@ -107,6 +87,8 @@ mod tests {
 
         let saved_path = result.expect("저장 성공");
         assert!(saved_path.exists());
+        // Daily/ 하위에 저장되었는지 확인
+        assert!(saved_path.starts_with(temp_dir.join("Daily")));
         assert_eq!(
             std::fs::read_to_string(&saved_path).expect("파일 읽기"),
             content
@@ -114,6 +96,7 @@ mod tests {
 
         // 테스트 후 정리 — 생성한 파일과 디렉토리를 삭제합니다.
         std::fs::remove_file(&saved_path).ok();
+        std::fs::remove_dir(temp_dir.join("Daily")).ok();
         std::fs::remove_dir(&temp_dir).ok();
     }
 }
