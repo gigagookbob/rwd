@@ -7,6 +7,8 @@
 pub mod claude;
 
 // codex 서브모듈: OpenAI Codex CLI 세션 로그 파싱
+// claude와 달리 pub use로 재공개하지 않음 — Codex 타입은 parser::codex:: 네임스페이스로 접근합니다.
+// 두 파서의 타입 이름이 충돌하지 않도록 네임스페이스를 분리합니다.
 pub mod codex;
 
 // Box<dyn std::error::Error>는 "어떤 에러든 담을 수 있는 박스"입니다.
