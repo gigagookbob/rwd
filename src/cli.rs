@@ -30,4 +30,6 @@ pub enum Commands {
     },
     /// 최신 버전으로 업데이트합니다
     Update,
+    /// 오늘의 개발 진척사항 요약을 생성합니다
+    Summary,
 }
