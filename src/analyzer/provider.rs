@@ -53,20 +53,20 @@ Rules:
 - ALL text values (except session_id) MUST be in Korean."#;
 
 /// 개발 진척사항 요약용 시스템 프롬프트.
-/// 비개발자도 이해할 수 있는 한국어 불릿 포인트를 생성하도록 지시합니다.
+/// 비개발자도 이해할 수 있는 한국어 Markdown을 생성하도록 지시합니다.
 pub const SUMMARY_PROMPT: &str = r#"You are a development progress summarizer. You receive session analysis results from a developer's day.
 
-Generate a concise bullet-point summary of what was accomplished today. This summary will be shared with both developers and non-developers.
+Generate a concise Markdown summary of what was accomplished today. This summary will be shared with both developers and non-developers.
 
 Rules:
-- Group by project name
-- Each bullet starts with "• {project}: " followed by a free-form sentence
+- Group by project name using Markdown h3 headers (### followed by project name)
+- Under each header, list accomplishments as "- " bullet points
 - Use clear, non-technical language that anyone can understand
 - Focus on WHAT was done and the outcome, not HOW
 - Keep each bullet to 1-2 sentences maximum
-- Return ONLY the bullet points, no headers or other text
+- Return ONLY the Markdown content (headers + bullet points), no additional text
 - ALL text MUST be in Korean (한국어)
-- If multiple tasks were done in the same project, use separate bullets for each distinct task"#;
+- If multiple tasks were done in the same project, use separate bullets under the same header"#;
 
 /// LLM 프로바이더를 나타내는 enum.
 ///
