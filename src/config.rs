@@ -29,3 +29,78 @@ pub struct LlmConfig {
 pub struct OutputConfig {
     pub path: String,
 }
+
+/// 설정 파일 경로를 반환합니다: ~/.config/rwd/config.toml
+/// dirs::home_dir()로 홈 디렉토리를 찾고, Unix 관례에 맞게 ~/.config를 사용합니다.
+pub fn config_path() -> Result<PathBuf, ConfigError> {
+    let home = dirs::home_dir()
+        .ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+    Ok(home.join(".config").join("rwd").join("config.toml"))
+}
+
+/// 설정을 TOML 파일로 저장합니다.
+/// toml::to_string_pretty()는 Config 구조체를 읽기 좋은 TOML 문자열로 변환합니다.
+/// create_dir_all()로 부모 디렉토리가 없으면 자동 생성합니다.
+pub fn save_config(config: &Config, path: &std::path::Path) -> Result<(), ConfigError> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    let toml_str = toml::to_string_pretty(config)?;
+    std::fs::write(path, toml_str)?;
+
+    // API 키가 포함된 파일이므로 소유자만 읽기/쓰기 가능하도록 권한 설정합니다.
+    // Unix 권한 0o600 = owner read+write only (보안 관례).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
+    }
+
+    Ok(())
+}
+
+/// TOML 파일에서 설정을 읽습니다.
+/// toml::from_str()는 TOML 문자열을 Config 구조체로 역직렬화합니다.
+pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
+    let content = std::fs::read_to_string(path)?;
+    let config: Config = toml::from_str(&content)?;
+    Ok(config)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_config_path_rwd_디렉토리_포함() {
+        let path = config_path().expect("경로 생성 성공");
+        assert!(path.ends_with("rwd/config.toml"));
+    }
+
+    #[test]
+    fn test_save_and_load_config_왕복_확인() {
+        let temp_dir = std::env::temp_dir().join("rwd_test_config");
+        let _ = std::fs::remove_dir_all(&temp_dir); // 이전 테스트 잔여물 정리
+        std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+        let path = temp_dir.join("config.toml");
+
+        let config = Config {
+            llm: LlmConfig {
+                provider: "anthropic".to_string(),
+                api_key: "sk-test-key".to_string(),
+            },
+            output: OutputConfig {
+                path: "/tmp/vault".to_string(),
+            },
+        };
+
+        save_config(&config, &path).expect("저장 성공");
+        let loaded = load_config(&path).expect("로드 성공");
+
+        assert_eq!(loaded.llm.provider, "anthropic");
+        assert_eq!(loaded.llm.api_key, "sk-test-key");
+        assert_eq!(loaded.output.path, "/tmp/vault");
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+}
