@@ -6,6 +6,9 @@
 // 이렇게 하면 parser::claude::LogEntry 형태로 접근할 수 있습니다.
 pub mod claude;
 
+// codex 서브모듈: OpenAI Codex CLI 세션 로그 파싱
+pub mod codex;
+
 // Box<dyn std::error::Error>는 "어떤 에러든 담을 수 있는 박스"입니다.
 // dyn은 동적 디스패치를 의미합니다 — 런타임에 실제 에러 타입이 결정됩니다 (Rust Book Ch.17 참조).
 // M5에서 thiserror 크레이트로 전용 에러 타입을 만들 예정이므로, 지금은 이 간단한 별칭을 사용합니다.
