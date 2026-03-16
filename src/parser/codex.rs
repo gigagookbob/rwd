@@ -67,7 +67,10 @@ impl CodexEntry {
     ///
     /// serde_json::Value의 인덱싱(&value["key"])은 키가 없으면 Value::Null을 반환합니다.
     /// .as_str()은 Value::String인 경우 &str을 반환하고, 아닌 경우 None을 반환합니다.
-    /// .unwrap_or_default()는 None일 때 타입의 기본값("")을 사용합니다 (Rust Book Ch.6.1 참조).
+    /// .unwrap_or_default()는 None일 때 빈 문자열("")을 사용합니다 (Rust Book Ch.6.1 참조).
+    ///
+    /// 필드 누락 시 빈 문자열로 대체하는 이유: Codex JSONL 스키마가 비공식이므로
+    /// 버전에 따라 필드가 없을 수 있습니다. 파싱 실패보다 빈 값으로 계속 진행하는 것이 낫습니다.
     pub fn from_raw(raw: CodexRawEntry) -> Self {
         let ts = raw.timestamp;
         let payload = &raw.payload;
@@ -150,11 +153,12 @@ pub fn list_session_files_for_date(
     sessions_dir: &Path,
     date: NaiveDate,
 ) -> Result<Vec<PathBuf>, super::ParseError> {
-    // 날짜를 YYYY/MM/DD 경로로 변환합니다. {:02}는 두 자리로 패딩합니다.
+    // 날짜를 YYYY/MM/DD 경로로 변환합니다.
+    // chrono의 format()은 이미 올바른 자릿수를 반환합니다 (%Y=4자리, %m/%d=2자리).
     let date_path = sessions_dir
-        .join(format!("{:04}", date.format("%Y")))
-        .join(format!("{:02}", date.format("%m")))
-        .join(format!("{:02}", date.format("%d")));
+        .join(date.format("%Y").to_string())
+        .join(date.format("%m").to_string())
+        .join(date.format("%d").to_string());
 
     // 디렉토리가 없으면 빈 목록을 반환합니다 (해당 날짜에 세션이 없는 경우).
     if !date_path.exists() {
