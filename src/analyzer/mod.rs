@@ -36,6 +36,16 @@ pub async fn analyze_entries(entries: &[LogEntry]) -> Result<AnalysisResult, Ana
     Ok(result)
 }
 
+/// 분석 결과를 기반으로 개발 진척사항 요약을 생성합니다.
+///
+/// session_summaries: 각 세션의 work_summary를 이어붙인 텍스트.
+/// LLM에게 SUMMARY_PROMPT와 함께 전달하여 비개발자도 읽을 수 있는 요약을 생성합니다.
+pub async fn analyze_summary(session_summaries: &str) -> Result<String, AnalyzerError> {
+    let (provider, api_key) = provider::load_provider()?;
+    let raw_response = provider.call_summary_api(&api_key, session_summaries).await?;
+    Ok(raw_response)
+}
+
 /// Codex 세션의 엔트리들을 분석하여 인사이트를 추출합니다.
 /// Claude용 analyze_entries()와 동일한 파이프라인이지만, Codex용 프롬프트를 사용합니다.
 pub async fn analyze_codex_entries(

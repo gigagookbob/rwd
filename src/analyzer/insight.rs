@@ -3,18 +3,19 @@
 // serde::Deserialize로 JSON 응답을 자동 변환합니다.
 // LLM에게 이 구조와 동일한 JSON 스키마로 응답하도록 프롬프트에서 지시합니다.
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// LLM이 추출한 인사이트의 전체 응답을 담는 구조체.
-/// Debug는 디버그 출력용, Deserialize는 JSON → 구조체 변환용 트레이트입니다.
-#[derive(Debug, Deserialize)]
+/// Debug는 디버그 출력용, Deserialize는 JSON → 구조체 변환용, Serialize는 구조체 → JSON 변환용.
+/// Clone은 캐시 저장 시 소유권 이동 없이 복제하기 위해 필요합니다 (Rust Book Ch.4 참조).
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AnalysisResult {
     pub sessions: Vec<SessionInsight>,
 }
 
 /// 세션별 인사이트.
 /// ARCHITECTURE.md에서 정의한 인사이트 카테고리를 반영합니다.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInsight {
     pub session_id: String,
     pub work_summary: String,
@@ -31,7 +32,7 @@ pub struct SessionInsight {
 
 /// 세션에서 배운 것 (Today I Learned).
 /// curiosities/corrections에서 파생하지 않고, LLM이 대화에서 직접 추출합니다.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TilItem {
     /// 배운 것을 한 줄로
     pub title: String,
@@ -40,14 +41,14 @@ pub struct TilItem {
 }
 
 /// 사용자의 선택 분기 (A vs B 중 왜 A를 선택했는가)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
     pub what: String,
     pub why: String,
 }
 
 /// 모델이 틀려서 사용자가 수정한 것
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Correction {
     pub model_said: String,
     pub user_corrected: String,

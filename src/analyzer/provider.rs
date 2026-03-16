@@ -52,6 +52,22 @@ Rules:
 - Return ONLY the JSON object. Do not wrap it in markdown code fences.
 - ALL text values (except session_id) MUST be in Korean."#;
 
+/// 개발 진척사항 요약용 시스템 프롬프트.
+/// 비개발자도 이해할 수 있는 한국어 불릿 포인트를 생성하도록 지시합니다.
+pub const SUMMARY_PROMPT: &str = r#"You are a development progress summarizer. You receive session analysis results from a developer's day.
+
+Generate a concise bullet-point summary of what was accomplished today. This summary will be shared with both developers and non-developers.
+
+Rules:
+- Group by project name
+- Each bullet starts with "• {project}: " followed by a free-form sentence
+- Use clear, non-technical language that anyone can understand
+- Focus on WHAT was done and the outcome, not HOW
+- Keep each bullet to 1-2 sentences maximum
+- Return ONLY the bullet points, no headers or other text
+- ALL text MUST be in Korean (한국어)
+- If multiple tasks were done in the same project, use separate bullets for each distinct task"#;
+
 /// LLM 프로바이더를 나타내는 enum.
 ///
 /// enum은 "이것 또는 저것" 중 하나의 값을 표현합니다 (Rust Book Ch.6.1).
@@ -80,6 +96,24 @@ impl LlmProvider {
             }
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api(api_key, SYSTEM_PROMPT, conversation_text).await
+            }
+        }
+    }
+
+    /// 개발 진척사항 요약 API를 호출합니다.
+    /// call_api()와 동일한 구조이지만, SUMMARY_PROMPT를 사용합니다.
+    pub async fn call_summary_api(
+        &self,
+        api_key: &str,
+        session_summaries: &str,
+    ) -> Result<String, super::AnalyzerError> {
+        match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::call_anthropic_api(api_key, SUMMARY_PROMPT, session_summaries)
+                    .await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::call_openai_api(api_key, SUMMARY_PROMPT, session_summaries).await
             }
         }
     }
