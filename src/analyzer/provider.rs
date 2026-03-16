@@ -86,43 +86,23 @@ impl LlmProvider {
     }
 }
 
-/// 환경 변수에서 LLM 프로바이더와 API 키를 읽습니다.
-///
-/// dotenvy::dotenv()로 .env 파일을 로드한 뒤,
-/// LLM_PROVIDER 환경 변수로 프로바이더를 선택합니다.
-/// 설정되지 않은 경우 기본값 "anthropic"을 사용합니다 (하위 호환성).
+/// 설정 파일(~/.config/rwd/config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
 ///
 /// 반환: (프로바이더, API 키) 튜플.
 /// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
-    dotenvy::dotenv().ok();
+    let config = crate::config::load_config_if_exists().ok_or_else(|| {
+        let hint = if std::path::Path::new(".env").exists() {
+            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+        } else {
+            ""
+        };
+        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
+    })?;
 
-    // unwrap_or_else: Result가 Err일 때 클로저를 실행하여 기본값을 생성합니다.
-    // 여기서는 LLM_PROVIDER가 없으면 "anthropic"을 기본값으로 사용합니다.
-    let provider_name = std::env::var("LLM_PROVIDER")
-        .unwrap_or_else(|_| "anthropic".to_string());
-
-    match provider_name.as_str() {
-        "anthropic" => {
-            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                "ANTHROPIC_API_KEY가 설정되지 않았습니다. \
-                 .env 파일에 추가하거나 환경 변수를 설정해 주세요. \
-                 예: echo 'ANTHROPIC_API_KEY=sk-ant-...' > .env"
-            })?;
-            Ok((LlmProvider::Anthropic, key))
-        }
-        "openai" => {
-            let key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                "OPENAI_API_KEY가 설정되지 않았습니다. \
-                 .env 파일에 추가하거나 환경 변수를 설정해 주세요. \
-                 예: echo 'OPENAI_API_KEY=sk-...' > .env"
-            })?;
-            Ok((LlmProvider::OpenAi, key))
-        }
-        other => Err(format!(
-            "지원하지 않는 LLM 프로바이더입니다: '{other}'. \
-             사용 가능: anthropic, openai"
-        )
-        .into()),
-    }
+    let provider = match config.llm.provider.as_str() {
+        "openai" => LlmProvider::OpenAi,
+        _ => LlmProvider::Anthropic,
+    };
+    Ok((provider, config.llm.api_key))
 }

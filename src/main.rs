@@ -2,6 +2,7 @@
 // Rust는 파일 하나가 모듈 하나에 대응됩니다 — cli.rs 파일이 cli 모듈이 됩니다 (Rust Book Ch.7 참조).
 mod analyzer;
 mod cli;
+mod config;
 mod output;
 mod parser;
 
@@ -27,6 +28,18 @@ async fn main() {
             // .await는 "이 비동기 작업이 끝날 때까지 기다려라"는 의미입니다.
             if let Err(e) = run_today().await {
                 eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Init => {
+            if let Err(e) = config::run_init() {
+                eprintln!("초기 설정 실패: {e}");
+                std::process::exit(1);
+            }
+        }
+        Commands::Config { key, value } => {
+            if let Err(e) = config::run_config(&key, &value) {
+                eprintln!("설정 변경 실패: {e}");
                 std::process::exit(1);
             }
         }
