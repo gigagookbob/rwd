@@ -38,8 +38,6 @@ pub async fn analyze_entries(entries: &[LogEntry]) -> Result<AnalysisResult, Ana
 
 /// Codex 세션의 엔트리들을 분석하여 인사이트를 추출합니다.
 /// Claude용 analyze_entries()와 동일한 파이프라인이지만, Codex용 프롬프트를 사용합니다.
-/// Task 6-7(main.rs 통합) 전까지는 호출되지 않으므로 dead_code 경고를 허용합니다.
-#[allow(dead_code)]
 pub async fn analyze_codex_entries(
     entries: &[CodexEntry],
     session_id: &str,
