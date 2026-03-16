@@ -91,14 +91,8 @@ impl LlmProvider {
 /// 반환: (프로바이더, API 키) 튜플.
 /// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
-    let config = crate::config::load_config_if_exists().ok_or_else(|| {
-        let hint = if std::path::Path::new(".env").exists() {
-            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
-        } else {
-            ""
-        };
-        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
-    })?;
+    let config = crate::config::load_config_if_exists()
+        .ok_or("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.")?;
 
     let provider = match config.llm.provider.as_str() {
         "openai" => LlmProvider::OpenAi,
