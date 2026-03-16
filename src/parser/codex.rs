@@ -8,9 +8,10 @@
 // #![...]은 "이 모듈 전체에 속성을 적용"하는 내부 속성입니다 (#[...]은 다음 항목에만 적용).
 #![allow(dead_code)]
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
-use std::path::PathBuf;
+use std::io::BufRead;
+use std::path::{Path, PathBuf};
 
 // === 1단계: loose 파싱 타입 ===
 
@@ -130,11 +131,93 @@ fn extract_codex_output_text(payload: &serde_json::Value) -> String {
         .join("")
 }
 
-// === 단위 테스트 (Task 1) ===
+// === 파일 탐색 함수 ===
+
+/// ~/.codex/sessions/ 디렉토리의 경로를 반환합니다.
+/// Codex CLI는 세션 로그를 이 경로에 저장합니다.
+pub fn discover_codex_sessions_dir() -> Result<PathBuf, super::ParseError> {
+    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
+    Ok(home.join(".codex").join("sessions"))
+}
+
+/// 특정 날짜의 세션 파일 목록을 반환합니다.
+///
+/// Codex는 세션을 YYYY/MM/DD/ 형태의 하위 디렉토리에 저장합니다.
+/// 예: ~/.codex/sessions/2026/03/16/*.jsonl
+///
+/// format! 매크로로 두 자리 수 날짜 형식(01, 02, ...)을 만듭니다.
+pub fn list_session_files_for_date(
+    sessions_dir: &Path,
+    date: NaiveDate,
+) -> Result<Vec<PathBuf>, super::ParseError> {
+    // 날짜를 YYYY/MM/DD 경로로 변환합니다. {:02}는 두 자리로 패딩합니다.
+    let date_path = sessions_dir
+        .join(format!("{:04}", date.format("%Y")))
+        .join(format!("{:02}", date.format("%m")))
+        .join(format!("{:02}", date.format("%d")));
+
+    // 디렉토리가 없으면 빈 목록을 반환합니다 (해당 날짜에 세션이 없는 경우).
+    if !date_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(&date_path)? {
+        let entry = entry?;
+        let path = entry.path();
+        // .jsonl 확장자를 가진 파일만 선택합니다.
+        // if let chains: Rust 2024 Edition의 let 조건 연결 문법입니다.
+        if path.is_file()
+            && let Some(ext) = path.extension()
+            && ext == "jsonl"
+        {
+            files.push(path);
+        }
+    }
+
+    Ok(files)
+}
+
+/// JSONL 파일을 읽어 CodexEntry 벡터로 변환합니다.
+///
+/// 파싱에 실패한 줄은 건너뛰고 eprintln으로 경고합니다.
+/// Claude Code의 parse_jsonl_file과 같은 방어적 파싱 전략을 따릅니다.
+pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::ParseError> {
+    let file = std::fs::File::open(path)?;
+    let reader = std::io::BufReader::new(file);
+    let mut entries = Vec::new();
+
+    for (line_num, line_result) in reader.lines().enumerate() {
+        let line = line_result?;
+        if line.trim().is_empty() {
+            continue;
+        }
+
+        // 2단계 파싱: raw JSON → CodexRawEntry → CodexEntry
+        match serde_json::from_str::<CodexRawEntry>(&line) {
+            Ok(raw) => entries.push(CodexEntry::from_raw(raw)),
+            Err(err) => {
+                eprintln!(
+                    "Warning: Failed to parse line {} in {}: {}",
+                    line_num + 1,
+                    path.display(),
+                    err
+                );
+            }
+        }
+    }
+
+    Ok(entries)
+}
+
+// === 단위 테스트 ===
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io::Write;
+
+    // === Task 1: 엔트리 타입 파싱 테스트 ===
 
     #[test]
     fn test_parse_session_meta_entry() {
@@ -202,5 +285,86 @@ mod tests {
         let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
         let entry = CodexEntry::from_raw(raw);
         assert!(matches!(entry, CodexEntry::Other));
+    }
+
+    // === Task 2: 파일 탐색 테스트 ===
+
+    #[test]
+    fn test_discover_codex_sessions_dir_returns_path() {
+        // 홈 디렉토리 없이도 경로 구조가 올바른지 확인합니다.
+        // 실제 디렉토리 존재 여부는 검사하지 않습니다.
+        let result = discover_codex_sessions_dir();
+        assert!(result.is_ok());
+        let path = result.unwrap();
+        // 경로가 "sessions"으로 끝나는지 확인합니다.
+        assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("sessions"));
+    }
+
+    #[test]
+    fn test_list_session_files_for_date_with_temp_dir() {
+        // 임시 디렉토리를 만들어 Codex의 날짜별 디렉토리 구조를 시뮬레이션합니다.
+        // tempfile 크레이트 없이 std::env::temp_dir()를 사용합니다.
+        let base = std::env::temp_dir().join(format!(
+            "rwd_test_codex_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let date_dir = base.join("2026").join("03").join("16");
+        std::fs::create_dir_all(&date_dir).unwrap();
+
+        // .jsonl 파일 2개와 .txt 파일 1개를 생성합니다.
+        let f1 = date_dir.join("session1.jsonl");
+        let f2 = date_dir.join("session2.jsonl");
+        let f3 = date_dir.join("not_a_session.txt");
+        std::fs::File::create(&f1).unwrap();
+        std::fs::File::create(&f2).unwrap();
+        std::fs::File::create(&f3).unwrap();
+
+        let date = NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
+        let files = list_session_files_for_date(&base, date).unwrap();
+
+        // .jsonl 파일 2개만 반환되어야 합니다.
+        assert_eq!(files.len(), 2);
+        // 모두 .jsonl 확장자를 가져야 합니다.
+        assert!(files
+            .iter()
+            .all(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl")));
+
+        // 임시 디렉토리 정리
+        std::fs::remove_dir_all(&base).unwrap();
+    }
+
+    #[test]
+    fn test_parse_codex_jsonl_file_with_mixed_entries() {
+        // 임시 JSONL 파일을 만들어 파싱을 검증합니다.
+        let base = std::env::temp_dir().join(format!(
+            "rwd_test_codex_parse_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&base).unwrap();
+
+        let file_path = base.join("test.jsonl");
+        let mut file = std::fs::File::create(&file_path).unwrap();
+
+        // 유효한 엔트리 3개와 잘못된 줄 1개를 포함합니다.
+        writeln!(file, r#"{{"timestamp":"2026-03-16T09:00:00Z","type":"session_meta","payload":{{"id":"s1","cwd":"/p","model_provider":"openai"}}}}"#).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-03-16T09:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello"}}}}"#).unwrap();
+        writeln!(file, r#"{{"timestamp":"2026-03-16T09:02:00Z","type":"response_item","payload":{{"type":"function_call","name":"shell","arguments":"{{}}"}}}}"#).unwrap();
+        writeln!(file, "not valid json").unwrap();
+
+        let entries = parse_codex_jsonl_file(&file_path).unwrap();
+
+        // 유효한 줄 3개만 파싱되어야 합니다 (잘못된 줄은 건너뜁니다).
+        assert_eq!(entries.len(), 3);
+        assert!(matches!(entries[0], CodexEntry::SessionMeta { .. }));
+        assert!(matches!(entries[1], CodexEntry::UserMessage { .. }));
+        assert!(matches!(entries[2], CodexEntry::FunctionCall { .. }));
+
+        std::fs::remove_dir_all(&base).unwrap();
     }
 }
