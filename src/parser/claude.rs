@@ -292,9 +292,11 @@ pub fn filter_entries_by_date(entries: Vec<LogEntry>, date: NaiveDate) -> Vec<Lo
     entries
         .into_iter()
         .filter(|entry| {
-            // .date_naive()는 DateTime<Utc>에서 날짜 부분만 추출합니다.
+            // UTC 타임스탬프를 시스템 로컬 타임존으로 변환한 뒤 날짜를 비교합니다.
+            // 이렇게 해야 KST 기준 "오늘"에 해당하는 엔트리가 정확히 필터링됩니다.
+            // 예: KST 2026-03-16 01:00 (= UTC 2026-03-15 16:00)은 KST 3월 16일에 포함됩니다.
             match entry_timestamp(entry) {
-                Some(ts) => ts.date_naive() == date,
+                Some(ts) => ts.with_timezone(&chrono::Local).date_naive() == date,
                 None => false,
             }
         })

@@ -16,6 +16,7 @@ pub type AnalyzerError = Box<dyn std::error::Error>;
 pub use insight::AnalysisResult;
 
 use crate::parser::claude::LogEntry;
+use crate::parser::codex::CodexEntry;
 
 /// 로그 엔트리들을 분석하여 인사이트를 추출합니다.
 /// 이 함수가 M3의 핵심 진입점입니다.
@@ -30,6 +31,19 @@ use crate::parser::claude::LogEntry;
 pub async fn analyze_entries(entries: &[LogEntry]) -> Result<AnalysisResult, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
     let prompt_text = prompt::build_prompt(entries)?;
+    let raw_response = provider.call_api(&api_key, &prompt_text).await?;
+    let result = insight::parse_response(&raw_response)?;
+    Ok(result)
+}
+
+/// Codex 세션의 엔트리들을 분석하여 인사이트를 추출합니다.
+/// Claude용 analyze_entries()와 동일한 파이프라인이지만, Codex용 프롬프트를 사용합니다.
+pub async fn analyze_codex_entries(
+    entries: &[CodexEntry],
+    session_id: &str,
+) -> Result<AnalysisResult, AnalyzerError> {
+    let (provider, api_key) = provider::load_provider()?;
+    let prompt_text = prompt::build_codex_prompt(entries, session_id)?;
     let raw_response = provider.call_api(&api_key, &prompt_text).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok(result)

@@ -7,11 +7,40 @@ use chrono::NaiveDate;
 
 use crate::analyzer::insight::{AnalysisResult, SessionInsight};
 
+/// 여러 소스의 분석 결과를 하나의 Markdown으로 결합합니다.
+/// 각 소스는 ## 헤딩으로 구분됩니다.
+///
+/// sources: (소스 이름, 분석 결과) 튜플의 슬라이스.
+/// 향후 새로운 에이전트 추가 시 sources에 추가하면 됩니다.
+pub fn render_combined_markdown(
+    sources: &[(&str, &AnalysisResult)],
+    date: NaiveDate,
+) -> String {
+    let mut md = String::new();
+    md.push_str(&format!("# {date} Dev Session Review\n\n"));
+
+    let mut all_til_items: Vec<String> = Vec::new();
+
+    for (source_name, analysis) in sources {
+        md.push_str(&format!("## {source_name}\n\n"));
+        for session in &analysis.sessions {
+            render_session(&mut md, session, &mut all_til_items);
+        }
+    }
+
+    render_til_section(&mut md, &all_til_items);
+    md
+}
+
 /// AnalysisResult와 날짜를 받아 Markdown 문자열을 생성합니다.
+///
+/// render_combined_markdown의 단일 소스 버전으로, 테스트에서 직접 사용됩니다.
+/// 프로덕션에서는 render_combined_markdown을 사용하세요.
 ///
 /// String::new()는 빈 문자열을 힙에 할당합니다.
 /// push_str()은 문자열 슬라이스(&str)를 String 끝에 추가합니다 (Rust Book Ch.8.2 참조).
 /// format!은 포매팅된 새 String을 반환하는 매크로입니다.
+#[cfg(test)]
 pub fn render_markdown(analysis: &AnalysisResult, date: NaiveDate) -> String {
     let mut md = String::new();
 
@@ -151,6 +180,55 @@ mod tests {
         let md = render_markdown(&analysis, test_date());
 
         assert!(!md.contains("### 주요 의사결정"));
+    }
+
+    #[test]
+    fn test_render_combined_markdown_두소스_섹션_분리() {
+        let claude = AnalysisResult {
+            sessions: vec![SessionInsight {
+                session_id: "c1".to_string(),
+                work_summary: "Claude 작업".to_string(),
+                decisions: vec![],
+                curiosities: vec![],
+                corrections: vec![],
+            }],
+        };
+        let codex = AnalysisResult {
+            sessions: vec![SessionInsight {
+                session_id: "x1".to_string(),
+                work_summary: "Codex 작업".to_string(),
+                decisions: vec![],
+                curiosities: vec![],
+                corrections: vec![],
+            }],
+        };
+        let sources = vec![("Claude Code", &claude), ("Codex", &codex)];
+        let date = NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
+        let md = render_combined_markdown(&sources, date);
+
+        assert!(md.contains("## Claude Code"));
+        assert!(md.contains("## Codex"));
+        assert!(md.contains("Claude 작업"));
+        assert!(md.contains("Codex 작업"));
+    }
+
+    #[test]
+    fn test_render_combined_markdown_단일소스_정상동작() {
+        let claude = AnalysisResult {
+            sessions: vec![SessionInsight {
+                session_id: "c1".to_string(),
+                work_summary: "Claude 작업".to_string(),
+                decisions: vec![],
+                curiosities: vec![],
+                corrections: vec![],
+            }],
+        };
+        let sources = vec![("Claude Code", &claude)];
+        let date = NaiveDate::from_ymd_opt(2026, 3, 16).unwrap();
+        let md = render_combined_markdown(&sources, date);
+
+        assert!(md.contains("## Claude Code"));
+        assert!(md.contains("Claude 작업"));
     }
 
     #[test]

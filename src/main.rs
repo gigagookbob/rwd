@@ -59,83 +59,226 @@ async fn main() {
 /// 비동기 함수는 호출 시 즉시 실행되지 않고, .await를 만나야 실행됩니다.
 /// 여기서는 analyzer::analyze_entries() 호출이 네트워크 I/O를 수행하므로 async가 필요합니다.
 async fn run_today() -> Result<(), parser::ParseError> {
-    // 업데이트 알림 체크 — 실패해도 무시 (네트워크 없는 환경 대응)
     update::notify_if_update_available().await;
 
-    // 설정 파일이 없으면 init을 먼저 실행하도록 안내하고 중단합니다.
     if config::load_config_if_exists().is_none() {
         eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
         std::process::exit(1);
     }
 
-    let today = chrono::Utc::now().date_naive();
-    let base_dir = parser::discover_log_dir()?;
+    // 시스템 타임존(KST) 기준으로 "오늘"을 결정합니다.
+    // UTC 대신 Local을 사용하여 KST 00:00~23:59 범위의 세션을 올바르게 포함합니다.
+    let today = chrono::Local::now().date_naive();
 
-    println!("Scanning: {}", base_dir.display());
+    // === Claude Code 로그 수집 ===
+    let claude_entries = collect_claude_entries(today);
 
-    let mut all_entries = Vec::new();
+    // === Codex 로그 수집 ===
+    let codex_sessions = collect_codex_sessions(today);
 
-    // 모든 프로젝트 디렉토리를 순회하며 오늘의 로그를 수집합니다.
-    for project_dir in parser::list_project_dirs()? {
-        for session_file in parser::list_session_files(&project_dir)? {
-            let entries = parser::parse_jsonl_file(&session_file)?;
-            // filter_entries_by_date는 Vec의 소유권을 가져가고 필터된 Vec을 반환합니다.
-            let today_entries = parser::filter_entries_by_date(entries, today);
-            // .extend()는 다른 Vec의 모든 요소를 현재 Vec에 추가합니다 (Rust Book Ch.8.1 참조).
-            all_entries.extend(today_entries);
-        }
-    }
-
-    if all_entries.is_empty() {
+    if claude_entries.is_empty() && codex_sessions.is_empty() {
         println!("No log entries found for today ({today}).");
         return Ok(());
     }
 
-    let summaries = parser::summarize_entries(&all_entries);
+    let now = chrono::Local::now();
+    println!("\n=== rwd today ({}) ===", now.format("%Y-%m-%d %H:%M"));
 
-    println!("\n=== rwd today ({today}) ===");
-    println!("Sessions: {}", summaries.len());
+    // === Claude Code 요약 출력 ===
+    if !claude_entries.is_empty() {
+        let summaries = parser::summarize_entries(&claude_entries);
+        let earliest = claude_earliest_time(&claude_entries);
+        let time_range = format_time_range(earliest, now);
 
-    for s in &summaries {
-        // &s.session_id[..8]은 문자열의 처음 8글자만 슬라이스합니다 (Rust Book Ch.4.3 참조).
-        let total_in = s.total_input_tokens
-            + s.total_cache_creation_tokens
-            + s.total_cache_read_tokens;
-        println!("\nSession: {}...", &s.session_id[..8]);
-        println!("  User messages:      {}", s.user_count);
-        println!("  Assistant messages:  {}", s.assistant_count);
-        println!("  Tool uses:          {}", s.tool_use_count);
-        println!(
-            "  Tokens (in/out):    {}/{}",
-            total_in, s.total_output_tokens
-        );
+        println!("\nClaude Code");
+        println!("{time_range}");
+        println!("총 세션: {}", summaries.len());
+
+        let (total_in, total_out) = claude_total_tokens(&summaries);
+        println!("총 in token: {} | 총 out token: {}", format_number(total_in), format_number(total_out));
     }
 
-    // LLM 분석 수행 — provider::load_provider()가 프로바이더 선택과 API 키 로딩을 담당합니다.
-    // 여기서는 표시 이름만 읽어 사용자에게 어떤 프로바이더가 사용되는지 알려줍니다.
+    // === Codex 요약 출력 ===
+    println!("\nCodex");
+    if codex_sessions.is_empty() {
+        println!("오늘 진행된 Codex 세션은 없습니다.");
+    } else {
+        let earliest = codex_earliest_time(&codex_sessions);
+        let time_range = format_time_range(earliest, now);
+        println!("{time_range}");
+        println!("총 세션: {}", codex_sessions.len());
+        println!("총 in token: - | 총 out token: -");
+    }
+
+    // === LLM 분석 ===
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
     println!("\n{provider_label} API로 인사이트 분석 중...");
-    // analyzer 실패 시에도 기존 요약은 이미 출력되었으므로 프로그램을 종료하지 않습니다.
-    // match로 성공/실패를 명시적으로 처리합니다 (?로 전파하지 않음).
-    match analyzer::analyze_entries(&all_entries).await {
-        Ok(analysis) => {
-            print_insights(&analysis);
-            // [M4] 분석 결과를 Markdown으로 변환하여 vault에 저장합니다.
-            save_analysis(&analysis, today);
+
+    let mut sources: Vec<(&str, analyzer::AnalysisResult)> = Vec::new();
+
+    // Claude 분석
+    if !claude_entries.is_empty() {
+        match analyzer::analyze_entries(&claude_entries).await {
+            Ok(result) => sources.push(("Claude Code", result)),
+            Err(e) => eprintln!("Claude Code 분석 실패: {e}"),
         }
-        Err(e) => eprintln!("분석 실패: {e}"),
+    }
+
+    // Codex 분석 — 세션별로 개별 분석
+    for (summary, entries) in &codex_sessions {
+        let id_display = if summary.session_id.len() >= 8 {
+            &summary.session_id[..8]
+        } else {
+            &summary.session_id
+        };
+        match analyzer::analyze_codex_entries(entries, &summary.session_id).await {
+            Ok(result) => sources.push(("Codex", result)),
+            Err(e) => eprintln!("Codex 분석 실패 ({id_display}): {e}"),
+        }
+    }
+
+    // 결과 출력 및 저장
+    if !sources.is_empty() {
+        for (name, analysis) in &sources {
+            println!("\n=== {name} 인사이트 ===");
+            print_insights(analysis);
+        }
+        save_combined_analysis(&sources, today);
     }
 
     Ok(())
 }
 
-/// [M4] 분석 결과를 Markdown으로 변환하여 Obsidian vault에 저장합니다.
-///
-/// 각 단계에서 실패하면 에러를 출력하고 return합니다 — 프로그램을 중단하지 않습니다.
-/// vault 경로가 설정되지 않아도 터미널 출력(print_insights)은 이미 완료된 상태입니다.
-fn save_analysis(analysis: &analyzer::AnalysisResult, date: chrono::NaiveDate) {
+/// Claude Code 로그를 수집합니다. 디렉토리가 없으면 빈 Vec을 반환합니다.
+/// 기존 run_today()는 디렉토리 부재 시 에러로 중단했지만,
+/// Codex 전용 사용자도 지원하기 위해 빈 결과로 진행합니다.
+fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEntry> {
+    match parser::discover_log_dir() {
+        Ok(dir) => println!("Scanning Claude Code: {}", dir.display()),
+        Err(_) => return Vec::new(),
+    }
+
+    let mut all_entries = Vec::new();
+    if let Ok(project_dirs) = parser::list_project_dirs() {
+        for project_dir in project_dirs {
+            if let Ok(session_files) = parser::list_session_files(&project_dir) {
+                for session_file in session_files {
+                    if let Ok(entries) = parser::parse_jsonl_file(&session_file) {
+                        let today_entries = parser::filter_entries_by_date(entries, today);
+                        all_entries.extend(today_entries);
+                    }
+                }
+            }
+        }
+    }
+    all_entries
+}
+
+/// Codex 세션 로그를 수집합니다. 디렉토리가 없으면 빈 Vec을 반환합니다.
+fn collect_codex_sessions(
+    today: chrono::NaiveDate,
+) -> Vec<(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)> {
+    let sessions_dir = match parser::codex::discover_codex_sessions_dir() {
+        Ok(dir) => {
+            println!("Scanning Codex: {}", dir.display());
+            dir
+        }
+        Err(_) => return Vec::new(),
+    };
+
+    // 로컬 타임존과 UTC의 날짜 차이를 고려하여 전날 디렉토리도 함께 스캔합니다.
+    let session_files =
+        match parser::codex::list_session_files_for_local_date(&sessions_dir, today) {
+            Ok(files) => files,
+            Err(_) => return Vec::new(),
+        };
+
+    let mut sessions = Vec::new();
+    for file in session_files {
+        if let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) {
+            // 세션의 첫 엔트리 날짜가 로컬 기준 "오늘"인지 확인합니다.
+            let session_date = entries.iter().find_map(parser::codex::entry_local_date);
+            if session_date != Some(today) {
+                continue;
+            }
+            let summary = parser::codex::summarize_codex_entries(&entries);
+            // 대화 내용이 있는 세션만 포함
+            if summary.user_count > 0 || summary.assistant_count > 0 {
+                sessions.push((summary, entries));
+            }
+        }
+    }
+    sessions
+}
+
+/// Claude 엔트리들에서 가장 이른 로컬 타임스탬프를 찾습니다.
+fn claude_earliest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::DateTime<chrono::Local>> {
+    entries
+        .iter()
+        .filter_map(parser::claude::entry_timestamp)
+        .min()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
+/// Codex 세션들에서 가장 이른 로컬 타임스탬프를 찾습니다.
+fn codex_earliest_time(
+    sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+) -> Option<chrono::DateTime<chrono::Local>> {
+    sessions
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .filter_map(|e| match e {
+            parser::codex::CodexEntry::SessionMeta { timestamp, .. }
+            | parser::codex::CodexEntry::UserMessage { timestamp, .. }
+            | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
+            | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
+            parser::codex::CodexEntry::Other => None,
+        })
+        .min()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
+/// Claude 세션 요약들의 총 토큰 수를 계산합니다. (total_in, total_out)
+fn claude_total_tokens(summaries: &[parser::claude::SessionSummary]) -> (u64, u64) {
+    summaries.iter().fold((0, 0), |(acc_in, acc_out), s| {
+        let total_in = s.total_input_tokens
+            + s.total_cache_creation_tokens
+            + s.total_cache_read_tokens;
+        (acc_in + total_in, acc_out + s.total_output_tokens)
+    })
+}
+
+/// 시간 범위를 "HH:MM ~ HH:MM" 형식으로 포매팅합니다.
+fn format_time_range(
+    earliest: Option<chrono::DateTime<chrono::Local>>,
+    now: chrono::DateTime<chrono::Local>,
+) -> String {
+    match earliest {
+        Some(start) => format!("{} ~ {}", start.format("%H:%M"), now.format("%H:%M")),
+        None => format!("? ~ {}", now.format("%H:%M")),
+    }
+}
+
+/// 숫자를 천 단위 콤마로 포매팅합니다.
+fn format_number(n: u64) -> String {
+    let s = n.to_string();
+    let mut result = String::new();
+    for (i, c) in s.chars().rev().enumerate() {
+        if i > 0 && i % 3 == 0 {
+            result.push(',');
+        }
+        result.push(c);
+    }
+    result.chars().rev().collect()
+}
+
+/// 여러 소스의 분석 결과를 결합하여 Markdown으로 저장합니다.
+fn save_combined_analysis(
+    sources: &[(&str, analyzer::AnalysisResult)],
+    date: chrono::NaiveDate,
+) {
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
         Err(e) => {
@@ -144,7 +287,14 @@ fn save_analysis(analysis: &analyzer::AnalysisResult, date: chrono::NaiveDate) {
         }
     };
 
-    let markdown = output::render_markdown(analysis, date);
+    // &[(&str, AnalysisResult)]를 &[(&str, &AnalysisResult)]로 변환합니다.
+    // render_combined_markdown은 참조 슬라이스를 받으므로, .iter()로 참조를 만들어 수집합니다.
+    let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = sources
+        .iter()
+        .map(|(name, result)| (*name, result))
+        .collect();
+
+    let markdown = output::render_combined_markdown(&source_refs, date);
 
     match output::save_to_vault(&vault_path, date, &markdown) {
         Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
