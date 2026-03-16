@@ -61,6 +61,16 @@ rwd config api-key sk-...                # API 키 변경
 rwd today
 ```
 
+## 삭제
+
+```bash
+# rwd 바이너리 삭제
+sh -c 'rm "$(command -v rwd)"'
+
+# 설정/데이터도 완전히 삭제하려면:
+rm -rf ~/.config/rwd ~/.rwd
+```
+
 ## 라이선스
 
 MIT
