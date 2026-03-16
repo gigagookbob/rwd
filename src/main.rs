@@ -2,6 +2,7 @@
 // Rust는 파일 하나가 모듈 하나에 대응됩니다 — cli.rs 파일이 cli 모듈이 됩니다 (Rust Book Ch.7 참조).
 mod analyzer;
 mod cli;
+mod config;
 mod output;
 mod parser;
 
