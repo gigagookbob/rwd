@@ -13,7 +13,7 @@ pub struct AnalysisResult {
 }
 
 /// 세션별 인사이트.
-/// ARCHITECTURE.md에서 정의한 4가지 인사이트 카테고리를 반영합니다.
+/// ARCHITECTURE.md에서 정의한 인사이트 카테고리를 반영합니다.
 #[derive(Debug, Deserialize)]
 pub struct SessionInsight {
     pub session_id: String,
@@ -24,6 +24,19 @@ pub struct SessionInsight {
     pub curiosities: Vec<String>,
     /// 모델이 틀리거나 몰라서 사용자가 수정한 것
     pub corrections: Vec<Correction>,
+    /// 사용자가 이 세션에서 실제로 배운 것 (제목 + 맥락 설명)
+    #[serde(default)]
+    pub til: Vec<TilItem>,
+}
+
+/// 세션에서 배운 것 (Today I Learned).
+/// curiosities/corrections에서 파생하지 않고, LLM이 대화에서 직접 추출합니다.
+#[derive(Debug, Deserialize)]
+pub struct TilItem {
+    /// 배운 것을 한 줄로
+    pub title: String,
+    /// 왜 이게 필요했고 어떻게 적용했는지 1-2줄
+    pub detail: String,
 }
 
 /// 사용자의 선택 분기 (A vs B 중 왜 A를 선택했는가)
@@ -105,5 +118,20 @@ mod tests {
     fn test_parse_response_invalid_json_returns_error() {
         let result = parse_response("이것은 JSON이 아닙니다");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_parse_response_til_필드_포함시_파싱() {
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"title":"serde tag 한계","detail":"중첩 JSON에서 안 먹힌다"}]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].til.len(), 1);
+        assert_eq!(result.sessions[0].til[0].title, "serde tag 한계");
+    }
+
+    #[test]
+    fn test_parse_response_til_필드_없어도_기본값_빈배열() {
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert!(result.sessions[0].til.is_empty());
     }
 }
