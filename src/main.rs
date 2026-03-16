@@ -66,7 +66,9 @@ async fn run_today() -> Result<(), parser::ParseError> {
         std::process::exit(1);
     }
 
-    let today = chrono::Utc::now().date_naive();
+    // 시스템 타임존(KST) 기준으로 "오늘"을 결정합니다.
+    // UTC 대신 Local을 사용하여 KST 00:00~23:59 범위의 세션을 올바르게 포함합니다.
+    let today = chrono::Local::now().date_naive();
 
     // === Claude Code 로그 수집 ===
     let claude_entries = collect_claude_entries(today);
@@ -176,14 +178,21 @@ fn collect_codex_sessions(
         Err(_) => return Vec::new(),
     };
 
-    let session_files = match parser::codex::list_session_files_for_date(&sessions_dir, today) {
-        Ok(files) => files,
-        Err(_) => return Vec::new(),
-    };
+    // 로컬 타임존과 UTC의 날짜 차이를 고려하여 전날 디렉토리도 함께 스캔합니다.
+    let session_files =
+        match parser::codex::list_session_files_for_local_date(&sessions_dir, today) {
+            Ok(files) => files,
+            Err(_) => return Vec::new(),
+        };
 
     let mut sessions = Vec::new();
     for file in session_files {
         if let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) {
+            // 세션의 첫 엔트리 날짜가 로컬 기준 "오늘"인지 확인합니다.
+            let session_date = entries.iter().find_map(parser::codex::entry_local_date);
+            if session_date != Some(today) {
+                continue;
+            }
             let summary = parser::codex::summarize_codex_entries(&entries);
             // 대화 내용이 있는 세션만 포함
             if summary.user_count > 0 || summary.assistant_count > 0 {
