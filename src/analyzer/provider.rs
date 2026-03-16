@@ -86,46 +86,23 @@ impl LlmProvider {
     }
 }
 
-/// 설정 파일(config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
+/// 설정 파일(~/.config/rwd/config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
 ///
-/// config.toml이 있으면 우선 사용하고, 없으면 기존 .env 방식으로 fallback합니다.
 /// 반환: (프로바이더, API 키) 튜플.
 /// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
-    // config.toml이 있으면 우선 사용
-    if let Some(config) = crate::config::load_config_if_exists() {
-        let provider = match config.llm.provider.as_str() {
-            "openai" => LlmProvider::OpenAi,
-            _ => LlmProvider::Anthropic,
+    let config = crate::config::load_config_if_exists().ok_or_else(|| {
+        let hint = if std::path::Path::new(".env").exists() {
+            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+        } else {
+            ""
         };
-        return Ok((provider, config.llm.api_key));
-    }
+        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
+    })?;
 
-    // fallback: 기존 .env 방식
-    dotenvy::dotenv().ok();
-
-    let provider_name = std::env::var("LLM_PROVIDER")
-        .unwrap_or_else(|_| "anthropic".to_string());
-
-    match provider_name.as_str() {
-        "anthropic" => {
-            let key = std::env::var("ANTHROPIC_API_KEY").map_err(|_| {
-                "ANTHROPIC_API_KEY가 설정되지 않았습니다. \
-                 `rwd init`을 실행하거나 .env 파일을 설정해 주세요."
-            })?;
-            Ok((LlmProvider::Anthropic, key))
-        }
-        "openai" => {
-            let key = std::env::var("OPENAI_API_KEY").map_err(|_| {
-                "OPENAI_API_KEY가 설정되지 않았습니다. \
-                 `rwd init`을 실행하거나 .env 파일을 설정해 주세요."
-            })?;
-            Ok((LlmProvider::OpenAi, key))
-        }
-        other => Err(format!(
-            "지원하지 않는 LLM 프로바이더입니다: '{other}'. \
-             사용 가능: anthropic, openai"
-        )
-        .into()),
-    }
+    let provider = match config.llm.provider.as_str() {
+        "openai" => LlmProvider::OpenAi,
+        _ => LlmProvider::Anthropic,
+    };
+    Ok((provider, config.llm.api_key))
 }

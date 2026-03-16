@@ -12,38 +12,24 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-/// Obsidian vault 경로를 설정 파일(config.toml)에서 읽습니다.
-/// config.toml이 있으면 우선 사용하고, 없으면 기존 .env 방식으로 fallback합니다.
+/// Obsidian vault 경로를 설정 파일(~/.config/rwd/config.toml)에서 읽습니다.
 ///
 /// PathBuf는 소유권을 가진 경로 타입입니다 — String이 &str의 소유 버전인 것처럼,
 /// PathBuf는 &Path의 소유 버전입니다 (Rust Book Ch.12 참조).
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
-    // config.toml이 있으면 우선 사용
-    if let Some(config) = crate::config::load_config_if_exists() {
-        let path = PathBuf::from(&config.output.path);
-        if !path.exists() {
-            std::fs::create_dir_all(&path)?;
-        }
-        return Ok(path);
-    }
-
-    // fallback: 기존 .env 방식
-    dotenvy::dotenv().ok();
-
-    let path_str = std::env::var("RWD_VAULT_PATH").map_err(|_| {
-        "RWD_VAULT_PATH가 설정되지 않았습니다. \
-         `rwd init`을 실행하거나 .env 파일을 설정해 주세요."
+    let config = crate::config::load_config_if_exists().ok_or_else(|| {
+        let hint = if std::path::Path::new(".env").exists() {
+            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+        } else {
+            ""
+        };
+        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
     })?;
 
-    let path = PathBuf::from(&path_str);
-
+    let path = PathBuf::from(&config.output.path);
     if !path.exists() {
-        return Err(format!("Vault 경로가 존재하지 않습니다: {}", path.display()).into());
+        std::fs::create_dir_all(&path)?;
     }
-    if !path.is_dir() {
-        return Err(format!("Vault 경로가 디렉토리가 아닙니다: {}", path.display()).into());
-    }
-
     Ok(path)
 }
 
