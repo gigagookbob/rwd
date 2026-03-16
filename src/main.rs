@@ -99,11 +99,12 @@ async fn run_today() -> Result<(), parser::ParseError> {
     }
 
     // === Codex 요약 출력 ===
-    if !codex_sessions.is_empty() {
+    println!("\nCodex");
+    if codex_sessions.is_empty() {
+        println!("오늘 진행된 Codex 세션은 없습니다.");
+    } else {
         let earliest = codex_earliest_time(&codex_sessions);
         let time_range = format_time_range(earliest, now);
-
-        println!("\nCodex");
         println!("{time_range}");
         println!("총 세션: {}", codex_sessions.len());
         println!("총 in token: - | 총 out token: -");
