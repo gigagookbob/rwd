@@ -29,16 +29,39 @@ pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>
 }
 
 /// 현재 버전보다 새 버전이 있으면 안내 메시지를 출력합니다.
-/// rwd today 시작 시 호출됩니다.
+/// 24시간 이내에 이미 체크했으면 캐시된 결과를 사용합니다 (GitHub API 호출 스킵).
+/// gh (GitHub CLI)와 동일한 패턴: 스탬프 파일에 마지막 체크 시각 + 최신 버전을 캐싱.
 pub async fn notify_if_update_available() {
-    match check_latest_version().await {
-        Ok(latest) if latest != CURRENT_VERSION => {
-            eprintln!(
-                "새 버전이 있습니다: v{latest} (현재: v{CURRENT_VERSION})"
-            );
-            eprintln!("업데이트: rwd update\n");
+    // 캐시가 있고, 24시간 이내면 캐시된 버전으로 알림
+    if let Some(cached) = crate::cache::load_update_check() {
+        let now = chrono::Utc::now();
+        let interval = chrono::Duration::hours(24);
+        if now - cached.checked_at < interval {
+            print_update_notice(&cached.latest_version);
+            return;
         }
-        _ => {}
+    }
+
+    // 캐시 미스 또는 만료 — GitHub API 호출
+    if let Ok(latest) = check_latest_version().await {
+        // 결과를 캐시에 저장 (실패해도 조용히 무시)
+        let cache = crate::cache::UpdateCheckCache {
+            checked_at: chrono::Utc::now(),
+            latest_version: latest.clone(),
+        };
+        let _ = crate::cache::save_update_check(&cache);
+
+        print_update_notice(&latest);
+    }
+}
+
+/// 최신 버전이 현재 버전과 다르면 업데이트 안내를 출력합니다.
+fn print_update_notice(latest_version: &str) {
+    if latest_version != CURRENT_VERSION {
+        eprintln!(
+            "새 버전이 있습니다: v{latest_version} (현재: v{CURRENT_VERSION})"
+        );
+        eprintln!("업데이트: rwd update\n");
     }
 }
 
