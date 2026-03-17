@@ -123,6 +123,14 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // 정리
     std::fs::remove_dir_all(&tmp_dir).ok();
 
+    // 업데이트 성공 후 캐시를 갱신하여, 다음 실행 시 "새 버전 있음" 알림이 뜨지 않도록 합니다.
+    // latest는 방금 설치한 새 버전이고, 다음 실행 시 CURRENT_VERSION이 이 값과 같아지므로 알림이 스킵됩니다.
+    let cache = crate::cache::UpdateCheckCache {
+        checked_at: chrono::Utc::now(),
+        latest_version: latest.clone(),
+    };
+    let _ = crate::cache::save_update_check(&cache);
+
     eprintln!("rwd v{latest} 업데이트 완료!");
     Ok(())
 }
