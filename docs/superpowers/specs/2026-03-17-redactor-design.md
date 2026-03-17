@@ -48,9 +48,25 @@ struct RedactorRule {
 }
 
 /// 마스킹 결과 요약
+/// RedactResult::empty()로 빈 결과 생성 (Default 구현)
 struct RedactResult {
     pub total_count: usize,
     pub by_type: BTreeMap<String, usize>,  // 정렬된 출력 보장
+}
+
+impl RedactResult {
+    /// redactor 비활성 시 사용하는 빈 결과
+    pub fn empty() -> Self {
+        Self { total_count: 0, by_type: BTreeMap::new() }
+    }
+
+    /// 여러 RedactResult를 합산 (Claude + Codex 결과 병합)
+    pub fn merge(&mut self, other: RedactResult) {
+        self.total_count += other.total_count;
+        for (key, count) in other.by_type {
+            *self.by_type.entry(key).or_insert(0) += count;
+        }
+    }
 }
 ```
 
@@ -90,6 +106,8 @@ output (Markdown 렌더링 + Vault 저장)
 
 따라서 프롬프트 텍스트 마스킹으로 모든 외부 유출 경로를 차단할 수 있다.
 
+**주의: 기존 API 시그니처 변경.** `analyze_entries`와 `analyze_codex_entries`에 `redactor_enabled: bool` 파라미터가 추가되고, 반환 타입이 `Result<AnalysisResult, _>`에서 `Result<(AnalysisResult, RedactResult), _>`로 변경된다. `main.rs`와 `run_summary`의 모든 호출부를 업데이트해야 한다.
+
 ### analyzer/mod.rs 호출 예시
 
 **Claude Code 경로:**
@@ -128,14 +146,37 @@ pub async fn analyze_codex_entries(entries: &[CodexEntry], session_id: &str, red
 }
 ```
 
-**main.rs에서 결과 출력:**
+**main.rs에서 결과 합산 및 출력:**
 
 ```rust
-// analyze 호출 후 RedactResult를 합산하여 출력
-if total_redact_result.total_count > 0 {
+// 각 analyze 호출의 RedactResult를 merge로 합산
+let mut total_redact = RedactResult::empty();
+
+let (claude_result, claude_redact) = analyze_entries(&entries, redactor_enabled).await?;
+total_redact.merge(claude_redact);
+
+for (summary, codex_entries) in &codex_sessions {
+    let (codex_result, codex_redact) = analyze_codex_entries(&codex_entries, &id, redactor_enabled).await?;
+    total_redact.merge(codex_redact);
+}
+
+// 합산 결과 출력
+if total_redact.total_count > 0 {
     println!("민감 정보 {}건 마스킹됨 ({})",
-        total_redact_result.total_count,
-        format_redact_summary(&total_redact_result));
+        total_redact.total_count,
+        total_redact.format_summary());
+}
+```
+
+**`format_summary` 메서드** (`redactor/mod.rs`의 `RedactResult` impl):
+
+```rust
+/// "API_KEY: 3, BEARER_TOKEN: 1" 형식의 요약 문자열 생성
+pub fn format_summary(&self) -> String {
+    self.by_type.iter()
+        .map(|(k, v)| format!("{k}: {v}"))
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 ```
 
@@ -150,7 +191,7 @@ if total_redact_result.total_count > 0 {
 | `BEARER_TOKEN` | Regex | `Bearer\s+[a-zA-Z0-9\-._~+/]+=*` | Authorization 헤더 |
 | `ENV_SECRET` | Regex | `(?i)(password\|secret\|api_key)\s*=\s*["'][^"']+["']` | 환경변수 할당 (따옴표로 감싼 값) |
 | `PRIVATE_IP` | Regex | `\b(10\.\d+\.\d+\.\d+\|172\.(1[6-9]\|2\d\|3[01])\.\d+\.\d+\|192\.168\.\d+\.\d+)\b` | 사설 IP 주소 |
-| `PRIVATE_KEY` | Regex | `-----BEGIN[A-Z ]*PRIVATE KEY-----` | PEM 개인키 블록 시작 |
+| `PRIVATE_KEY` | Regex | `-----BEGIN[A-Z ]*PRIVATE KEY-----` | PEM 개인키 헤더 (v0.5.0에서는 헤더만 마스킹, 키 본문은 멀티라인 지원 시 처리) |
 
 변경 사항 (리뷰 반영):
 - 모든 FixedPrefix 패턴에 `\b` 워드 바운더리 추가 (false positive 감소)
