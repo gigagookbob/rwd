@@ -65,6 +65,9 @@ rwd/
 │   │   └── prompt.rs      # 프롬프트 생성
 │   ├── output/            # Markdown 생성 및 파일 저장
 │   │   └── mod.rs
+│   ├── redactor/          # 민감 정보 마스킹
+│   │   ├── mod.rs         # 공개 API: redact_text(), RedactResult
+│   │   └── patterns.rs    # 내장 패턴 정의 (LazyLock 초기화)
 │   └── config.rs          # 설정 (경로, API 키 등)
 └── tests/
 ```
@@ -74,6 +77,7 @@ rwd/
 | 크레이트    | 용도               |
 | ----------- | ------------------ |
 | `clap`      | CLI 파싱           |
+| `regex`     | 정규표현식 매칭    |
 | `serde`     | 직렬화/역직렬화    |
 | `serde_json`| JSON/JSONL 파싱    |
 | `reqwest`   | HTTP 클라이언트    |
