@@ -229,4 +229,38 @@ mod tests {
         assert!(output.contains("[REDACTED:ENV_SECRET]"));
         assert_eq!(result.total_count, 1);
     }
+
+    /// 실제 세션 로그에 가까운 프롬프트 텍스트로 통합 검증합니다.
+    #[test]
+    fn test_현실적_프롬프트_통합_마스킹() {
+        let prompt = r#"[Session: abc123]
+[USER] .env 파일에 api_key = "sk-proj-abcdefghijklmnopqrstuvwxyz1234" 넣었는데 작동 안 해
+[ASSISTANT] 키 형식을 확인해보겠습니다. Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload 헤더로 테스트하세요
+[USER] AWS 키도 설정했어 AKIAIOSFODNN7EXAMPLE 이거
+[ASSISTANT] 사설 서버 10.0.1.50 에 배포하려면 ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn 토큰이 필요합니다
+[USER] -----BEGIN RSA PRIVATE KEY----- 이 키 파일도 필요한가요?"#;
+
+        let (output, result) = redact_text(prompt);
+
+        // 모든 민감 정보가 마스킹되었는지 확인
+        assert!(output.contains("[REDACTED:ENV_SECRET]"));
+        assert!(output.contains("[REDACTED:BEARER_TOKEN]"));
+        assert!(output.contains("[REDACTED:AWS_KEY]"));
+        assert!(output.contains("[REDACTED:PRIVATE_IP]"));
+        assert!(output.contains("[REDACTED:GITHUB_TOKEN]"));
+        assert!(output.contains("[REDACTED:PRIVATE_KEY]"));
+
+        // 원본 민감 정보가 남아있지 않은지 확인
+        assert!(!output.contains("sk-proj-abcdefghijklmnopqrstuvwxyz1234"));
+        assert!(!output.contains("AKIAIOSFODNN7EXAMPLE"));
+        assert!(!output.contains("10.0.1.50"));
+
+        // 일반 텍스트는 그대로 유지
+        assert!(output.contains("[Session: abc123]"));
+        assert!(output.contains("[USER]"));
+        assert!(output.contains("작동 안 해"));
+
+        assert_eq!(result.total_count, 6);
+        assert_eq!(result.by_type.len(), 6);
+    }
 }
