@@ -69,10 +69,12 @@ async fn main() {
 async fn run_today() -> Result<(), parser::ParseError> {
     update::notify_if_update_available().await;
 
-    if config::load_config_if_exists().is_none() {
+    let loaded_config = config::load_config_if_exists();
+    if loaded_config.is_none() {
         eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
         std::process::exit(1);
     }
+    let redactor_enabled = loaded_config.as_ref().unwrap().is_redactor_enabled();
 
     // 시스템 타임존(KST) 기준으로 "오늘"을 결정합니다.
     // UTC 대신 Local을 사용하여 KST 00:00~23:59 범위의 세션을 올바르게 포함합니다.
@@ -149,11 +151,15 @@ async fn run_today() -> Result<(), parser::ParseError> {
     println!("\n{provider_label} API로 인사이트 분석 중...");
 
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
+    let mut total_redact = redactor::RedactResult::empty();
 
     // Claude 분석
     if !claude_entries.is_empty() {
-        match analyzer::analyze_entries(&claude_entries).await {
-            Ok(result) => sources.push(("Claude Code".to_string(), result)),
+        match analyzer::analyze_entries(&claude_entries, redactor_enabled).await {
+            Ok((result, redact_result)) => {
+                total_redact.merge(redact_result);
+                sources.push(("Claude Code".to_string(), result));
+            }
             Err(e) => eprintln!("Claude Code 분석 실패: {e}"),
         }
     }
@@ -165,13 +171,20 @@ async fn run_today() -> Result<(), parser::ParseError> {
         } else {
             &summary.session_id
         };
-        match analyzer::analyze_codex_entries(entries, &summary.session_id).await {
-            Ok(result) => sources.push(("Codex".to_string(), result)),
+        match analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled).await {
+            Ok((result, redact_result)) => {
+                total_redact.merge(redact_result);
+                sources.push(("Codex".to_string(), result));
+            }
             Err(e) => eprintln!("Codex 분석 실패 ({id_display}): {e}"),
         }
     }
 
     // 결과 출력 및 저장
+    if total_redact.total_count > 0 {
+        println!("민감 정보 {}건 마스킹됨 ({})", total_redact.total_count, total_redact.format_summary());
+    }
+
     if !sources.is_empty() {
         let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = sources
             .iter()

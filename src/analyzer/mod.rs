@@ -17,6 +17,7 @@ pub use insight::AnalysisResult;
 
 use crate::parser::claude::LogEntry;
 use crate::parser::codex::CodexEntry;
+use crate::redactor::RedactResult;
 
 /// 로그 엔트리들을 분석하여 인사이트를 추출합니다.
 /// 이 함수가 M3의 핵심 진입점입니다.
@@ -28,12 +29,20 @@ use crate::parser::codex::CodexEntry;
 /// provider::load_provider()로 프로바이더와 API 키를 읽고,
 /// provider.call_api()로 선택된 프로바이더의 API를 호출합니다.
 /// 이 함수 자체는 어떤 프로바이더가 사용되는지 알 필요가 없습니다.
-pub async fn analyze_entries(entries: &[LogEntry]) -> Result<AnalysisResult, AnalyzerError> {
+pub async fn analyze_entries(
+    entries: &[LogEntry],
+    redactor_enabled: bool,
+) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
     let prompt_text = prompt::build_prompt(entries)?;
-    let raw_response = provider.call_api(&api_key, &prompt_text).await?;
+    let (final_prompt, redact_result) = if redactor_enabled {
+        crate::redactor::redact_text(&prompt_text)
+    } else {
+        (prompt_text, RedactResult::empty())
+    };
+    let raw_response = provider.call_api(&api_key, &final_prompt).await?;
     let result = insight::parse_response(&raw_response)?;
-    Ok(result)
+    Ok((result, redact_result))
 }
 
 /// 분석 결과를 기반으로 개발 진척사항 요약을 생성합니다.
@@ -51,10 +60,16 @@ pub async fn analyze_summary(session_summaries: &str) -> Result<String, Analyzer
 pub async fn analyze_codex_entries(
     entries: &[CodexEntry],
     session_id: &str,
-) -> Result<AnalysisResult, AnalyzerError> {
+    redactor_enabled: bool,
+) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
     let prompt_text = prompt::build_codex_prompt(entries, session_id)?;
-    let raw_response = provider.call_api(&api_key, &prompt_text).await?;
+    let (final_prompt, redact_result) = if redactor_enabled {
+        crate::redactor::redact_text(&prompt_text)
+    } else {
+        (prompt_text, RedactResult::empty())
+    };
+    let raw_response = provider.call_api(&api_key, &final_prompt).await?;
     let result = insight::parse_response(&raw_response)?;
-    Ok(result)
+    Ok((result, redact_result))
 }
