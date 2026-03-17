@@ -6,6 +6,7 @@ mod cli;
 mod config;
 mod output;
 mod parser;
+mod redactor;
 mod update;
 
 // use 키워드로 다른 모듈의 항목을 현재 스코프로 가져옵니다.
