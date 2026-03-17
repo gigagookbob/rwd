@@ -1,6 +1,6 @@
 [package]
 name = "rwd"
-version = "0.4.1"
+version = "0.5.0"
 edition = "2024"
 description = "AI 코딩 세션 로그를 분석하여 일일 개발 인사이트를 추출하는 CLI 도구"
 license = "MIT"
