@@ -24,7 +24,8 @@ gh (GitHub CLI) 스타일: 스탬프 파일에 마지막 체크 시각 + 최신 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateCheckCache {
     /// 마지막 체크 시각. chrono의 serde feature로 자동 직렬화/역직렬화.
-    pub checked_at: chrono::DateTime<chrono::FixedOffset>,
+    /// DateTime<Utc>를 사용하여 TTL 비교 시 타입 일치를 보장합니다.
+    pub checked_at: chrono::DateTime<chrono::Utc>,
     /// 그때 확인한 최신 버전 (예: "0.6.0")
     pub latest_version: String,
 }
