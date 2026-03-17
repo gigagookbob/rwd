@@ -14,6 +14,17 @@ pub type ConfigError = Box<dyn std::error::Error>;
 pub struct Config {
     pub llm: LlmConfig,
     pub output: OutputConfig,
+    /// 민감 정보 마스킹 설정. 섹션이 없으면 None → 기본 활성.
+    pub redactor: Option<RedactorConfig>,
+}
+
+impl Config {
+    /// redactor 활성 여부를 반환합니다.
+    /// redactor 섹션이 없으면(None) 기본값 true (활성)입니다.
+    /// is_none_or()는 Option이 None이면 true를, Some이면 클로저 결과를 반환합니다 (Rust 1.82+).
+    pub fn is_redactor_enabled(&self) -> bool {
+        self.redactor.as_ref().is_none_or(|r| r.enabled)
+    }
 }
 
 /// LLM 프로바이더 관련 설정.
@@ -28,6 +39,12 @@ pub struct LlmConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct OutputConfig {
     pub path: String,
+}
+
+/// Redactor(민감 정보 마스킹) 설정.
+#[derive(Debug, Serialize, Deserialize)]
+pub struct RedactorConfig {
+    pub enabled: bool,
 }
 
 /// 설정 파일 경로를 반환합니다: ~/.config/rwd/config.toml
@@ -140,6 +157,7 @@ pub fn run_init() -> Result<(), ConfigError> {
         output: OutputConfig {
             path: output_path.to_string_lossy().to_string(),
         },
+        redactor: None,
     };
 
     save_config(&config, &config_file)?;
@@ -298,6 +316,7 @@ mod tests {
             output: OutputConfig {
                 path: "/tmp/vault".to_string(),
             },
+            redactor: None,
         };
 
         save_config(&config, &path).expect("저장 성공");
@@ -335,5 +354,36 @@ mod tests {
         assert!(result.is_none());
 
         std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_config_redactor_없으면_none() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("파싱 성공");
+        assert!(config.redactor.is_none());
+    }
+
+    #[test]
+    fn test_config_redactor_있으면_파싱() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+
+[redactor]
+enabled = false
+"#;
+        let config: Config = toml::from_str(toml_str).expect("파싱 성공");
+        assert_eq!(config.redactor.unwrap().enabled, false);
     }
 }
