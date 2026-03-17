@@ -12,6 +12,18 @@ use crate::analyzer::insight::AnalysisResult;
 
 pub type CacheError = Box<dyn std::error::Error>;
 
+/// 업데이트 체크 캐시. ~/.rwd/cache/update-check.json에 저장.
+/// chrono의 serde feature를 활용하여 DateTime을 JSON으로 자동 변환합니다 (Cargo.toml에 이미 활성화됨).
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UpdateCheckCache {
+    /// 마지막 체크 시각. UTC 기준으로 저장하여 타임존 변경에 영향받지 않도록 합니다.
+    /// DateTime<Utc>를 사용하는 이유: TTL 비교 시 동일한 타입끼리 뺄셈해야 하기 때문입니다.
+    /// chrono의 Sub 구현은 양쪽 타입이 같아야 동작합니다 (DateTime<Utc> - DateTime<Utc>).
+    pub checked_at: chrono::DateTime<chrono::Utc>,
+    /// 그때 확인한 최신 버전 (예: "0.6.0")
+    pub latest_version: String,
+}
+
 /// 캐시 파일에 저장되는 데이터.
 /// date: "YYYY-MM-DD" 문자열로 저장합니다.
 /// sources: (소스 이름, AnalysisResult) 튜플의 Vec입니다.
@@ -59,4 +71,20 @@ pub fn save_cache(cache: &TodayCache, date: NaiveDate) -> Result<(), CacheError>
     let json = serde_json::to_string_pretty(cache)?;
     std::fs::write(&path, json)?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_update_check_cache_직렬화_역직렬화_동일_데이터_반환() {
+        let cache = UpdateCheckCache {
+            checked_at: chrono::Utc::now(),
+            latest_version: "0.6.0".to_string(),
+        };
+        let json = serde_json::to_string_pretty(&cache).expect("직렬화 성공");
+        let loaded: UpdateCheckCache = serde_json::from_str(&json).expect("역직렬화 성공");
+        assert_eq!(loaded.latest_version, "0.6.0");
+    }
 }
