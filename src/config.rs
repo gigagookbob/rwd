@@ -21,7 +21,7 @@ pub struct Config {
 impl Config {
     /// redactor 활성 여부를 반환합니다.
     /// redactor 섹션이 없으면(None) 기본값 true (활성)입니다.
-    /// map_or()는 Option이 None이면 기본값을, Some이면 클로저 결과를 반환합니다.
+    /// is_none_or()는 Option이 None이면 true를, Some이면 클로저 결과를 반환합니다 (Rust 1.82+).
     pub fn is_redactor_enabled(&self) -> bool {
         self.redactor.as_ref().is_none_or(|r| r.enabled)
     }
