@@ -23,6 +23,12 @@ async fn main() {
     // --help나 --version이 입력되면 자동으로 처리하고 프로그램을 종료합니다.
     let args = cli::Cli::parse();
 
+    // 모든 커맨드 실행 전에 업데이트 알림을 표시합니다.
+    // Commands::Update는 자체적으로 버전 체크를 하므로 스킵합니다 (중복 알림 방지).
+    if !matches!(args.command, Commands::Update) {
+        update::notify_if_update_available().await;
+    }
+
     // match는 enum의 모든 가능한 값을 처리하는 표현식입니다 (Rust Book Ch.6 참조).
     // Rust 컴파일러는 모든 변형(variant)을 처리했는지 검사합니다 — 빠뜨리면 컴파일 에러가 납니다.
     match args.command {
@@ -67,8 +73,6 @@ async fn main() {
 /// 비동기 함수는 호출 시 즉시 실행되지 않고, .await를 만나야 실행됩니다.
 /// 여기서는 analyzer::analyze_entries() 호출이 네트워크 I/O를 수행하므로 async가 필요합니다.
 async fn run_today() -> Result<(), parser::ParseError> {
-    update::notify_if_update_available().await;
-
     let loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
