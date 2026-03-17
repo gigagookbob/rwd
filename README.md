@@ -54,6 +54,15 @@ rwd config provider openai               # LLM 프로바이더 변경
 rwd config api-key sk-...                # API 키 변경
 ```
 
+### 민감 정보 마스킹
+
+`rwd today` 실행 시 세션 로그의 민감 정보(API 키, 토큰, 사설 IP 등)를 자동으로 마스킹한 후 LLM에 전송합니다. 기본 활성 상태이며, 비활성화하려면 `~/.config/rwd/config.toml`에 다음을 추가하세요:
+
+```toml
+[redactor]
+enabled = false
+```
+
 ## 사용법
 
 ```bash
