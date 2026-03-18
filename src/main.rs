@@ -157,31 +157,18 @@ async fn run_today() -> Result<(), parser::ParseError> {
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
 
-    // Claude 분석
+    // Claude 분석 — 실패 시 전체 분석 중단 (all-or-nothing)
     if !claude_entries.is_empty() {
-        match analyzer::analyze_entries(&claude_entries, redactor_enabled).await {
-            Ok((result, redact_result)) => {
-                total_redact.merge(redact_result);
-                sources.push(("Claude Code".to_string(), result));
-            }
-            Err(e) => eprintln!("Claude Code 분석 실패: {e}"),
-        }
+        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled).await?;
+        total_redact.merge(redact_result);
+        sources.push(("Claude Code".to_string(), result));
     }
 
-    // Codex 분석 — 세션별로 개별 분석
+    // Codex 분석 — 실패 시 전체 분석 중단 (all-or-nothing)
     for (summary, entries) in &codex_sessions {
-        let id_display = if summary.session_id.len() >= 8 {
-            &summary.session_id[..8]
-        } else {
-            &summary.session_id
-        };
-        match analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled).await {
-            Ok((result, redact_result)) => {
-                total_redact.merge(redact_result);
-                sources.push(("Codex".to_string(), result));
-            }
-            Err(e) => eprintln!("Codex 분석 실패 ({id_display}): {e}"),
-        }
+        let (result, redact_result) = analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled).await?;
+        total_redact.merge(redact_result);
+        sources.push(("Codex".to_string(), result));
     }
 
     // 결과 출력 및 저장
@@ -309,7 +296,7 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
         }
     };
 
-    let file_path = vault_path.join("Daily").join(format!("{date}.md"));
+    let file_path = vault_path.join(format!("{date}.md"));
     if !file_path.exists() {
         eprintln!("Daily Markdown 파일이 없습니다: {}", file_path.display());
         return;
