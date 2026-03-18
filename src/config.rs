@@ -136,18 +136,19 @@ pub fn run_init() -> Result<(), ConfigError> {
     };
     eprintln!("API 키 설정됨: {masked}");
 
-    // 출력 경로 자동 감지
-    let output_path = default_output_path();
-    match detect_obsidian_vault() {
-        Some(vault) => {
-            eprintln!("Obsidian vault 감지됨: {}", vault.display());
-            eprintln!("출력 경로: {}/Daily/", output_path.display());
-        }
-        None => {
-            eprintln!("Obsidian vault를 찾지 못했습니다.");
-            eprintln!("기본 출력 경로: {}/Daily/", output_path.display());
-        }
-    }
+    // 출력 경로 — vault 감지 결과를 기본값으로 제안하고, 사용자에게 확인받습니다.
+    let default_path = detect_obsidian_vault()
+        .unwrap_or_else(default_output_path);
+    eprint!("마크다운 저장 경로 [{}]: ", default_path.display());
+    let mut path_input = String::new();
+    std::io::stdin().read_line(&mut path_input)?;
+    let path_input = path_input.trim();
+    let output_path = if path_input.is_empty() {
+        default_path
+    } else {
+        PathBuf::from(path_input)
+    };
+    eprintln!("출력 경로: {}", output_path.display());
 
     let config = Config {
         llm: LlmConfig {
@@ -259,6 +260,7 @@ pub fn detect_vault_in_dir(search_dir: &std::path::Path) -> Option<PathBuf> {
 /// 2순위: ~/Documents/Obsidian/ 하위에서 .obsidian 마커 탐색 (fallback)
 /// 찾지 못하면 None 반환 — 호출부에서 기본 경로를 사용합니다.
 pub fn detect_obsidian_vault() -> Option<PathBuf> {
+
     // 1순위: Obsidian 앱 설정에서 직접 읽기
     if let Some(vault) = detect_vault_from_obsidian_json() {
         return Some(vault);
@@ -270,23 +272,9 @@ pub fn detect_obsidian_vault() -> Option<PathBuf> {
     detect_vault_in_dir(&obsidian_dir)
 }
 
-/// 기본 출력 경로(vault root)를 결정합니다.
-/// 1. Obsidian vault 자동 감지 → vault root 반환
-/// 2. 감지 실패 → ~/.rwd/output (기본 경로)
-///
-/// 주의: Daily/ 하위 디렉토리는 save_to_vault()가 자동으로 붙입니다.
-/// Obsidian에서 vault가 "Daily" 폴더로 등록된 경우, 부모를 vault root로 사용합니다.
+/// Obsidian vault 미감지 시 사용하는 기본 출력 경로.
+/// ~/.rwd/output을 반환합니다.
 pub fn default_output_path() -> PathBuf {
-    if let Some(vault) = detect_obsidian_vault() {
-        // vault가 "Daily"로 끝나면 부모가 실제 vault root
-        // (Obsidian에서 Daily 폴더를 vault로 등록한 경우)
-        if vault.file_name().and_then(|n| n.to_str()) == Some("Daily")
-            && let Some(parent) = vault.parent()
-        {
-            return parent.to_path_buf();
-        }
-        return vault;
-    }
     let home = dirs::home_dir().unwrap_or_else(|| PathBuf::from("."));
     home.join(".rwd").join("output")
 }
