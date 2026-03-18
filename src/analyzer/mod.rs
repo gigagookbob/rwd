@@ -8,6 +8,7 @@ pub mod openai;
 pub mod planner;
 pub mod prompt;
 pub mod provider;
+pub mod summarizer;
 
 // parser 모듈과 동일한 에러 타입 패턴을 사용합니다.
 // M5에서 thiserror로 전용 에러 타입을 만들 예정입니다.

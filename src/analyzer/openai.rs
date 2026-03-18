@@ -115,6 +115,49 @@ pub async fn call_openai_api(
     Ok(text.message.content.clone())
 }
 
+/// max_tokens를 지정할 수 있는 API 호출 변형.
+pub async fn call_openai_api_with_max_tokens(
+    api_key: &str,
+    system_prompt: &str,
+    conversation_text: &str,
+    max_tokens: u32,
+) -> Result<String, super::AnalyzerError> {
+    let client = reqwest::Client::new();
+    let request_body = ChatRequest {
+        model: MODEL.to_string(),
+        messages: vec![
+            ChatMessage {
+                role: "system".to_string(),
+                content: system_prompt.to_string(),
+            },
+            ChatMessage {
+                role: "user".to_string(),
+                content: conversation_text.to_string(),
+            },
+        ],
+        max_tokens,
+    };
+    let response = client
+        .post(API_URL)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(format!("OpenAI API 요청 실패 ({status}): {error_body}").into());
+    }
+    let chat_response: ChatResponse = response.json().await?;
+    let text = chat_response
+        .choices
+        .first()
+        .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
+    Ok(text.message.content.clone())
+}
+
 /// OpenAI API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
 pub async fn probe_openai_rate_limits(api_key: &str) -> Option<RateLimits> {
     let client = reqwest::Client::new();

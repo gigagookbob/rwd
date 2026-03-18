@@ -118,6 +118,31 @@ impl LlmProvider {
         }
     }
 
+    /// max_tokens를 지정할 수 있는 API 호출.
+    /// 요약 호출 시 max_tokens를 2000으로 제한한다.
+    pub async fn call_api_with_max_tokens(
+        &self,
+        api_key: &str,
+        system_prompt: &str,
+        conversation_text: &str,
+        max_tokens: u32,
+    ) -> Result<String, super::AnalyzerError> {
+        match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::call_anthropic_api_with_max_tokens(
+                    api_key, system_prompt, conversation_text, max_tokens,
+                )
+                .await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::call_openai_api_with_max_tokens(
+                    api_key, system_prompt, conversation_text, max_tokens,
+                )
+                .await
+            }
+        }
+    }
+
     /// 프로바이더의 표시 이름을 반환합니다.
     pub fn display_name(&self) -> &'static str {
         match self {
