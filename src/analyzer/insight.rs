@@ -63,9 +63,15 @@ pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerE
     let cleaned = strip_code_fences(raw_text);
 
     serde_json::from_str::<AnalysisResult>(&cleaned).map_err(|e| {
+        // 한글 등 멀티바이트 문자를 안전하게 자르기 위해 char_indices를 사용합니다.
+        // &str[..n]은 바이트 인덱스 기준이라 멀티바이트 문자 중간을 자르면 패닉합니다.
+        let preview_end = raw_text
+            .char_indices()
+            .nth(200)
+            .map_or(raw_text.len(), |(idx, _)| idx);
         format!(
             "LLM 응답 JSON 파싱 실패: {e}\n응답 내용 (처음 200자): {}",
-            &raw_text[..raw_text.len().min(200)]
+            &raw_text[..preview_end]
         )
         .into()
     })
