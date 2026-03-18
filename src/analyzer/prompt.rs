@@ -166,6 +166,32 @@ pub fn build_codex_prompt(
     Ok(output)
 }
 
+/// LogEntry 슬라이스에서 고유한 세션 ID 목록을 추출합니다.
+/// 등장 순서를 유지하며 중복을 제거합니다.
+/// fallback 시 세션별로 엔트리를 분할하기 위해 사용합니다.
+pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
+    let mut ids = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for entry in entries {
+        // User/Assistant/Progress는 session_id: String
+        // System은 session_id: Option<String>
+        // FileHistorySnapshot은 session_id 필드가 없음
+        let id = match entry {
+            LogEntry::User(e) => Some(e.session_id.as_str()),
+            LogEntry::Assistant(e) => Some(e.session_id.as_str()),
+            LogEntry::Progress(e) => Some(e.session_id.as_str()),
+            LogEntry::System(e) => e.session_id.as_deref(),
+            LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
+        };
+        if let Some(session_id) = id {
+            if seen.insert(session_id.to_string()) {
+                ids.push(session_id.to_string());
+            }
+        }
+    }
+    ids
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -244,6 +270,30 @@ mod tests {
         assert!(prompt.contains("[USER] 프로젝트 구조를 알려줘"));
         assert!(prompt.contains("[ASSISTANT] src/ 디렉토리를 확인했습니다"));
         assert!(prompt.contains("[Session: test-session]"));
+    }
+
+    #[test]
+    fn test_extract_session_ids_중복_제거_순서_유지() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"첫번째"}}"#,
+            ).unwrap(),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"두번째"}}"#,
+            ).unwrap(),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T12:00:00Z","uuid":"u3","message":{"role":"user","content":"세번째"}}"#,
+            ).unwrap(),
+        ];
+        let ids = extract_session_ids(&entries);
+        assert_eq!(ids, vec!["s1".to_string(), "s2".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_session_ids_빈_엔트리_빈_결과() {
+        let entries: Vec<LogEntry> = vec![];
+        let ids = extract_session_ids(&entries);
+        assert!(ids.is_empty());
     }
 
     #[test]
