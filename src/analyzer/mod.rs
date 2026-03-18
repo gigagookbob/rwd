@@ -204,15 +204,21 @@ async fn execute_plan(
     let total_steps = plan.steps.len();
 
     for (i, step) in plan.steps.iter().enumerate() {
-        let sp = start_spinner(format!(
-            "[{}/{}] {} 분석 중...", i + 1, total_steps, step.session_id
-        ));
-
         let session_entries: Vec<LogEntry> = entries
             .iter()
             .filter(|e| entry_session_id(e) == Some(step.session_id.as_str()))
             .cloned()
             .collect();
+
+        // Direct 스텝은 외부 스피너, Summarize 스텝은 내부에 자체 스피너가 있으므로 생략
+        let use_spinner = step.strategy == StepStrategy::Direct;
+        let sp = if use_spinner {
+            Some(start_spinner(format!(
+                "[{}/{}] {} 분석 중...", i + 1, total_steps, step.session_id
+            )))
+        } else {
+            None
+        };
 
         let result = match &step.strategy {
             StepStrategy::Direct => {
@@ -236,21 +242,25 @@ async fn execute_plan(
 
         match result {
             Ok((analysis, redact)) => {
-                stop_spinner(sp);
+                if let Some(h) = sp { stop_spinner(h); }
                 eprintln!("✓ [{}/{}] 완료", i + 1, total_steps);
                 results.push(analysis);
                 total_redact.merge(redact);
             }
             Err(e) => {
-                stop_spinner(sp);
+                if let Some(h) = sp { stop_spinner(h); }
                 let err_msg = e.to_string();
                 if err_msg.contains("429") {
                     // 429 rate limit: 60초 카운트다운 후 재시도
                     countdown_sleep(60).await;
 
-                    let retry_sp = start_spinner(format!(
-                        "[{}/{}] {} 재시도 중...", i + 1, total_steps, step.session_id
-                    ));
+                    let retry_sp = if use_spinner {
+                        Some(start_spinner(format!(
+                            "[{}/{}] {} 재시도 중...", i + 1, total_steps, step.session_id
+                        )))
+                    } else {
+                        None
+                    };
 
                     let retry = match &step.strategy {
                         StepStrategy::Direct => {
@@ -277,13 +287,13 @@ async fn execute_plan(
 
                     match retry {
                         Ok((analysis, redact)) => {
-                            stop_spinner(retry_sp);
+                            if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!("✓ [{}/{}] 재시도 성공", i + 1, total_steps);
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
-                            stop_spinner(retry_sp);
+                            if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!(
                                 "⚠ [{}/{}] {} 스킵 (재시도 실패): {}",
                                 i + 1, total_steps, step.session_id, retry_err
