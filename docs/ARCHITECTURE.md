@@ -58,11 +58,13 @@ rwd/
 │   │   └── codex.rs       # Codex 로그 파서
 │   ├── analyzer/          # 구조화된 데이터 → LLM 인사이트 추출
 │   │   ├── mod.rs         # 오케스트레이터
-│   │   ├── provider.rs    # LlmProvider enum, 프로바이더 선택
 │   │   ├── anthropic.rs   # Anthropic Claude API 클라이언트
-│   │   ├── openai.rs      # OpenAI API 클라이언트
 │   │   ├── insight.rs     # 응답 파싱
-│   │   └── prompt.rs      # 프롬프트 생성
+│   │   ├── openai.rs      # OpenAI API 클라이언트
+│   │   ├── planner.rs     # 분석 계획 생성
+│   │   ├── prompt.rs      # 프롬프트 생성
+│   │   ├── provider.rs    # LlmProvider enum, 프로바이더 선택
+│   │   └── summarizer.rs  # 분석 결과 요약
 │   ├── output/            # Markdown 생성 및 파일 저장
 │   │   └── mod.rs
 │   ├── redactor/          # 민감 정보 마스킹
