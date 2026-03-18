@@ -39,14 +39,24 @@ pub async fn analyze_entries(
     let (provider, api_key) = provider::load_provider()?;
 
     // 1. Probe: 사용자의 실제 rate limit 확인
-    eprintln!("⠋ API 한도 확인 중...");
-    let limits = provider.probe_rate_limits(&api_key).await;
-    eprintln!(
-        "✓ ITPM: {} | OTPM: {} | RPM: {}",
-        limits.input_tokens_per_minute,
-        limits.output_tokens_per_minute,
-        limits.requests_per_minute,
-    );
+    // eprint!(개행 없음)로 출력 후, 결과를 \r로 같은 줄에 덮어씁니다.
+    eprint!("⠋ API 한도 확인 중...");
+    let (limits, probed) = provider.probe_rate_limits(&api_key).await;
+    if probed {
+        eprintln!(
+            "\r✓ ITPM: {} | OTPM: {} | RPM: {}",
+            limits.input_tokens_per_minute,
+            limits.output_tokens_per_minute,
+            limits.requests_per_minute,
+        );
+    } else {
+        eprintln!(
+            "\r⚠ rate limit 확인 실패, 기본값으로 진행합니다. (ITPM: {} | OTPM: {} | RPM: {})",
+            limits.input_tokens_per_minute,
+            limits.output_tokens_per_minute,
+            limits.requests_per_minute,
+        );
+    }
 
     // 2. Estimate: 세션별 토큰 추정
     let estimates = prompt::estimate_sessions(entries);
