@@ -5,6 +5,7 @@
 pub mod anthropic;
 pub mod insight;
 pub mod openai;
+pub mod planner;
 pub mod prompt;
 pub mod provider;
 
