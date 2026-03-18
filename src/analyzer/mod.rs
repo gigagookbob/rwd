@@ -40,9 +40,122 @@ pub async fn analyze_entries(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(&api_key, &final_prompt).await?;
-    let result = insight::parse_response(&raw_response)?;
-    Ok((result, redact_result))
+
+    match provider.call_api(&api_key, &final_prompt).await {
+        Ok(raw_response) => {
+            let result = insight::parse_response(&raw_response)?;
+            Ok((result, redact_result))
+        }
+        Err(e) => {
+            let err_msg = e.to_string();
+
+            // 429 TPM 제한 → 친절한 에러 메시지
+            if is_rate_limit_error(&err_msg) {
+                return Err(
+                    "API 요청 빈도(TPM) 제한을 초과했습니다.\n\
+                     해결 방법:\n  \
+                     • rwd config provider anthropic  (Anthropic으로 전환)\n  \
+                     • LLM 프로바이더 플랜 업그레이드  (TPM 한도 증가)"
+                        .into(),
+                );
+            }
+
+            // 400 컨텍스트 제한 → 세션별 분할 fallback
+            if is_context_limit_error(&err_msg) {
+                eprintln!("프롬프트가 토큰 제한을 초과하여 세션별 분석으로 전환합니다...");
+                return analyze_entries_by_session(
+                    entries,
+                    &provider,
+                    &api_key,
+                    redactor_enabled,
+                )
+                .await;
+            }
+
+            // 기타 에러 → 그대로 전파
+            Err(e)
+        }
+    }
+}
+
+/// 세션별로 엔트리를 분할하여 개별 분석 후 결과를 병합합니다.
+/// 400 컨텍스트 초과 에러 발생 시 fallback으로 호출됩니다.
+async fn analyze_entries_by_session(
+    entries: &[LogEntry],
+    provider: &provider::LlmProvider,
+    api_key: &str,
+    redactor_enabled: bool,
+) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
+    let session_ids = prompt::extract_session_ids(entries);
+    let total = session_ids.len();
+    let mut results = Vec::new();
+    let mut total_redact = RedactResult::empty();
+
+    for (i, session_id) in session_ids.iter().enumerate() {
+        eprintln!("  세션 {}/{total} 분석 중... ({session_id})", i + 1);
+
+        // 해당 세션의 엔트리만 필터링하여 새 Vec으로 수집합니다.
+        // clone이 필요한 이유: build_prompt()가 &[LogEntry]를 받으므로 소유권이 있는 Vec이 필요합니다.
+        let session_entries: Vec<LogEntry> = entries
+            .iter()
+            .filter(|e| entry_session_id(e) == Some(session_id.as_str()))
+            .cloned()
+            .collect();
+
+        if session_entries.is_empty() {
+            continue;
+        }
+
+        let prompt_text = match prompt::build_prompt(&session_entries) {
+            Ok(p) => p,
+            Err(e) => {
+                eprintln!("  세션 {session_id} 프롬프트 생성 실패: {e}");
+                continue;
+            }
+        };
+
+        let (final_prompt, redact_result) = if redactor_enabled {
+            crate::redactor::redact_text(&prompt_text)
+        } else {
+            (prompt_text, RedactResult::empty())
+        };
+        total_redact.merge(redact_result);
+
+        match provider.call_api(api_key, &final_prompt).await {
+            Ok(raw_response) => {
+                match insight::parse_response(&raw_response) {
+                    Ok(result) => results.push(result),
+                    Err(e) => eprintln!("  세션 {session_id} 응답 파싱 실패: {e}"),
+                }
+            }
+            Err(e) => {
+                let err_msg = e.to_string();
+                if is_context_limit_error(&err_msg) || is_rate_limit_error(&err_msg) {
+                    eprintln!("  세션 {session_id} 분석 스킵 (토큰 제한 초과)");
+                } else {
+                    eprintln!("  세션 {session_id} 분석 실패: {err_msg}");
+                }
+            }
+        }
+    }
+
+    if results.is_empty() {
+        return Err("모든 세션의 분석에 실패했습니다.".into());
+    }
+
+    Ok((insight::merge_results(results), total_redact))
+}
+
+/// LogEntry에서 session_id를 추출합니다.
+/// SystemEntry는 Option<String>, FileHistorySnapshotEntry는 session_id 없음.
+fn entry_session_id(entry: &LogEntry) -> Option<&str> {
+    match entry {
+        LogEntry::User(e) => Some(&e.session_id),
+        LogEntry::Assistant(e) => Some(&e.session_id),
+        LogEntry::Progress(e) => Some(&e.session_id),
+        LogEntry::System(e) => e.session_id.as_deref(),
+        LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
+    }
 }
 
 /// 분석 결과를 기반으로 개발 진척사항 요약을 생성합니다.
@@ -72,4 +185,58 @@ pub async fn analyze_codex_entries(
     let raw_response = provider.call_api(&api_key, &final_prompt).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
+}
+
+/// API 에러가 컨텍스트 윈도우 초과(400)인지 판별합니다.
+/// 에러 메시지에 "400"과 ("token" 또는 "context")가 포함되면 컨텍스트 제한 에러로 판단합니다.
+/// 주의: 에러 메시지 형식에 의존하므로, M5에서 구조화된 에러 타입으로 전환 예정.
+fn is_context_limit_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_lowercase();
+    lower.contains("400") && (lower.contains("token") || lower.contains("context"))
+}
+
+/// API 에러가 TPM/RPM 제한 초과(429)인지 판별합니다.
+fn is_rate_limit_error(err_msg: &str) -> bool {
+    err_msg.contains("429")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_context_limit_error_400_token_포함시_true() {
+        let err = "API 요청 실패 (400 Bad Request): {\"error\":{\"message\":\"maximum context length is 128000 tokens\"}}";
+        assert!(is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_400_context_포함시_true() {
+        let err = "OpenAI API 요청 실패 (400 Bad Request): {\"error\":{\"code\":\"context_length_exceeded\"}}";
+        assert!(is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_429_에러는_false() {
+        let err = "OpenAI API 요청 실패 (429 Too Many Requests): rate limit";
+        assert!(!is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_일반_에러는_false() {
+        let err = "API 요청 실패 (500 Internal Server Error): server error";
+        assert!(!is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_rate_limit_error_429_포함시_true() {
+        let err = "OpenAI API 요청 실패 (429 Too Many Requests): {\"error\":{\"message\":\"Rate limit exceeded\"}}";
+        assert!(is_rate_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_rate_limit_error_400_에러는_false() {
+        let err = "API 요청 실패 (400 Bad Request): token limit";
+        assert!(!is_rate_limit_error(err));
+    }
 }

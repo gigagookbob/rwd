@@ -1,4 +1,4 @@
-// LLM API 응답을 구조화된 인사이트 타입으로 파싱하는 모듈.
+// LLM API 응답을 구조화된 인사이트 타입으로 파싱하고, 분할 분석 결과를 병합하는 모듈.
 //
 // serde::Deserialize로 JSON 응답을 자동 변환합니다.
 // LLM에게 이 구조와 동일한 JSON 스키마로 응답하도록 프롬프트에서 지시합니다.
@@ -81,6 +81,17 @@ pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerE
 ///
 /// .trim()은 문자열 양끝의 공백을 제거합니다 (Rust Book Ch.8 참조).
 /// .strip_prefix(), .strip_suffix()는 특정 접두사/접미사를 제거하고 Option<&str>을 반환합니다.
+/// 여러 AnalysisResult를 하나로 병합합니다.
+/// 각 결과의 sessions Vec을 순서대로 합칩니다.
+/// fallback 시 세션별 개별 분석 결과를 하나의 결과로 조합하기 위해 사용합니다.
+pub fn merge_results(results: Vec<AnalysisResult>) -> AnalysisResult {
+    let sessions = results
+        .into_iter()
+        .flat_map(|r| r.sessions)
+        .collect();
+    AnalysisResult { sessions }
+}
+
 fn strip_code_fences(text: &str) -> String {
     let trimmed = text.trim();
 
@@ -133,6 +144,40 @@ mod tests {
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].til.len(), 1);
         assert_eq!(result.sessions[0].til[0].title, "serde tag 한계");
+    }
+
+    #[test]
+    fn test_merge_results_여러_결과_병합() {
+        let r1 = AnalysisResult {
+            sessions: vec![SessionInsight {
+                session_id: "s1".to_string(),
+                work_summary: "작업1".to_string(),
+                decisions: vec![],
+                curiosities: vec![],
+                corrections: vec![],
+                til: vec![],
+            }],
+        };
+        let r2 = AnalysisResult {
+            sessions: vec![SessionInsight {
+                session_id: "s2".to_string(),
+                work_summary: "작업2".to_string(),
+                decisions: vec![],
+                curiosities: vec![],
+                corrections: vec![],
+                til: vec![],
+            }],
+        };
+        let merged = merge_results(vec![r1, r2]);
+        assert_eq!(merged.sessions.len(), 2);
+        assert_eq!(merged.sessions[0].session_id, "s1");
+        assert_eq!(merged.sessions[1].session_id, "s2");
+    }
+
+    #[test]
+    fn test_merge_results_빈_벡터_빈_결과() {
+        let merged = merge_results(vec![]);
+        assert!(merged.sessions.is_empty());
     }
 
     #[test]
