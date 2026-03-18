@@ -24,7 +24,7 @@ use std::path::{Path, PathBuf};
 ///
 /// rename_all = "kebab-case"는 PascalCase variant 이름을 kebab-case로 변환합니다.
 /// 예: FileHistorySnapshot → "file-history-snapshot"
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "kebab-case")]
 pub enum LogEntry {
     User(UserEntry),
@@ -42,7 +42,7 @@ pub enum LogEntry {
 /// 사용자 메시지 엔트리
 /// #[serde(rename_all = "camelCase")]는 Rust의 snake_case 필드를 JSON의 camelCase에 매핑합니다.
 /// 예: session_id ↔ "sessionId"
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct UserEntry {
     pub timestamp: DateTime<Utc>,
@@ -55,7 +55,7 @@ pub struct UserEntry {
 }
 
 /// 어시스턴트(AI) 응답 엔트리
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AssistantEntry {
     pub timestamp: DateTime<Utc>,
@@ -66,7 +66,7 @@ pub struct AssistantEntry {
 }
 
 /// 어시스턴트 메시지의 상세 구조
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct AssistantMessage {
     #[serde(default)]
     pub model: Option<String>,
@@ -81,7 +81,7 @@ pub struct AssistantMessage {
 /// #[serde(tag = "type")]으로 "type" 필드 값에 따라 variant가 결정됩니다.
 /// rename_all = "snake_case"는 PascalCase를 snake_case로 변환합니다.
 /// 예: ToolUse → "tool_use"
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum ContentBlock {
     Thinking {
@@ -111,7 +111,7 @@ pub enum ContentBlock {
 /// API 토큰 사용량
 /// Claude API는 캐시 히트/생성 토큰을 별도 필드로 분리합니다.
 /// 총 입력 토큰 = input_tokens + cache_creation_input_tokens + cache_read_input_tokens
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 pub struct Usage {
     #[serde(default)]
     pub input_tokens: u64,
@@ -126,7 +126,7 @@ pub struct Usage {
 }
 
 /// 진행 상황 엔트리 (에이전트 작업 진행 등)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProgressEntry {
     pub timestamp: DateTime<Utc>,
@@ -134,7 +134,7 @@ pub struct ProgressEntry {
 }
 
 /// 시스템 엔트리
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SystemEntry {
     pub timestamp: DateTime<Utc>,
@@ -143,7 +143,7 @@ pub struct SystemEntry {
 }
 
 /// 파일 히스토리 스냅샷 엔트리 (M2에서는 상세 분석 불필요)
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct FileHistorySnapshotEntry {
     #[serde(default)]
