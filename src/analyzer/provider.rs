@@ -80,6 +80,15 @@ pub enum LlmProvider {
 }
 
 impl LlmProvider {
+    /// 모델별 최대 출력 토큰.
+    /// 모델 스펙이며 tier/사용자와 무관한 상수.
+    pub fn max_output_tokens(&self) -> u64 {
+        match self {
+            LlmProvider::Anthropic => 32_000,
+            LlmProvider::OpenAi => 16_384,
+        }
+    }
+
     /// 선택된 프로바이더의 API를 호출하여 원시 텍스트 응답을 반환합니다.
     ///
     /// &self는 이 메서드가 LlmProvider 값의 참조를 받는다는 의미입니다.
@@ -88,14 +97,15 @@ impl LlmProvider {
         &self,
         api_key: &str,
         conversation_text: &str,
+        max_tokens: u32,
     ) -> Result<String, super::AnalyzerError> {
         match self {
             LlmProvider::Anthropic => {
-                super::anthropic::call_anthropic_api(api_key, SYSTEM_PROMPT, conversation_text)
+                super::anthropic::call_anthropic_api(api_key, SYSTEM_PROMPT, conversation_text, max_tokens)
                     .await
             }
             LlmProvider::OpenAi => {
-                super::openai::call_openai_api(api_key, SYSTEM_PROMPT, conversation_text).await
+                super::openai::call_openai_api(api_key, SYSTEM_PROMPT, conversation_text, max_tokens).await
             }
         }
     }
@@ -109,11 +119,11 @@ impl LlmProvider {
     ) -> Result<String, super::AnalyzerError> {
         match self {
             LlmProvider::Anthropic => {
-                super::anthropic::call_anthropic_api(api_key, SUMMARY_PROMPT, session_summaries)
+                super::anthropic::call_anthropic_api(api_key, SUMMARY_PROMPT, session_summaries, 16384)
                     .await
             }
             LlmProvider::OpenAi => {
-                super::openai::call_openai_api(api_key, SUMMARY_PROMPT, session_summaries).await
+                super::openai::call_openai_api(api_key, SUMMARY_PROMPT, session_summaries, 16384).await
             }
         }
     }
