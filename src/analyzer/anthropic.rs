@@ -4,6 +4,7 @@
 // async/await 패턴으로 네트워크 I/O 동안 스레드를 차단하지 않습니다.
 
 use serde::{Deserialize, Serialize};
+use super::planner::RateLimits;
 
 // Claude Messages API 엔드포인트
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
@@ -105,4 +106,102 @@ pub async fn call_anthropic_api(
         .ok_or("API 응답에 텍스트 블록이 없습니다")?;
 
     Ok(text.to_string())
+}
+
+/// max_tokens를 지정할 수 있는 API 호출 변형.
+/// 요약 호출 시 2000으로 제한하여 출력 크기를 통제한다.
+pub async fn call_anthropic_api_with_max_tokens(
+    api_key: &str,
+    system_prompt: &str,
+    conversation_text: &str,
+    max_tokens: u32,
+) -> Result<String, super::AnalyzerError> {
+    let client = reqwest::Client::new();
+    let request_body = ApiRequest {
+        model: MODEL.to_string(),
+        max_tokens,
+        system: system_prompt.to_string(),
+        messages: vec![ApiMessage {
+            role: "user".to_string(),
+            content: conversation_text.to_string(),
+        }],
+    };
+    let response = client
+        .post(API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", API_VERSION)
+        .header("content-type", "application/json")
+        .json(&request_body)
+        .send()
+        .await?;
+
+    let status = response.status();
+    if !status.is_success() {
+        let error_body = response.text().await.unwrap_or_default();
+        return Err(format!("API 요청 실패 ({status}): {error_body}").into());
+    }
+    let api_response: ApiResponse = response.json().await?;
+    let text = api_response
+        .content
+        .iter()
+        .find(|block| block.block_type == "text")
+        .and_then(|block| block.text.as_deref())
+        .ok_or("API 응답에 텍스트 블록이 없습니다")?;
+    Ok(text.to_string())
+}
+
+/// Anthropic API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
+/// 실패 시 None을 반환하며, 호출자가 default_generous로 대체한다.
+pub async fn probe_anthropic_rate_limits(api_key: &str) -> Option<RateLimits> {
+    let client = reqwest::Client::new();
+
+    let request_body = ApiRequest {
+        model: MODEL.to_string(),
+        max_tokens: 1,
+        system: String::new(),
+        messages: vec![ApiMessage {
+            role: "user".to_string(),
+            content: "ping".to_string(),
+        }],
+    };
+
+    let response = client
+        .post(API_URL)
+        .header("x-api-key", api_key)
+        .header("anthropic-version", API_VERSION)
+        .header("content-type", "application/json")
+        .json(&request_body)
+        .send()
+        .await
+        .ok()?;
+
+    parse_anthropic_rate_headers(&response)
+}
+
+/// Anthropic 응답 헤더에서 rate limit 값을 추출한다.
+fn parse_anthropic_rate_headers(response: &reqwest::Response) -> Option<RateLimits> {
+    let headers = response.headers();
+
+    let itpm = headers
+        .get("anthropic-ratelimit-input-tokens-limit")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())?;
+
+    let otpm = headers
+        .get("anthropic-ratelimit-output-tokens-limit")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(itpm / 4);
+
+    let rpm = headers
+        .get("anthropic-ratelimit-requests-limit")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50);
+
+    Some(RateLimits {
+        input_tokens_per_minute: itpm,
+        output_tokens_per_minute: otpm,
+        requests_per_minute: rpm,
+    })
 }
