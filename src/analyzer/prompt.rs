@@ -139,6 +139,31 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
     texts.join("\n")
 }
 
+/// LogEntry에서 (role, text) 튜플 목록을 추출한다.
+/// summarizer의 split_into_chunks에서 사용한다.
+pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
+    let mut messages = Vec::new();
+    for entry in entries {
+        match entry {
+            LogEntry::User(e) => {
+                if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
+                    messages.push(("USER".to_string(), text));
+                }
+            }
+            LogEntry::Assistant(e) => {
+                if let Some(msg) = &e.message {
+                    let text = extract_assistant_text(&msg.content);
+                    if !text.is_empty() {
+                        messages.push(("ASSISTANT".to_string(), text));
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    messages
+}
+
 /// Codex 엔트리들을 LLM 분석용 대화 텍스트로 변환합니다.
 /// Codex는 파일 하나가 세션 하나이므로, session_id를 외부에서 전달받습니다.
 pub fn build_codex_prompt(
