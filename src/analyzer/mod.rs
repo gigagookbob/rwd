@@ -342,7 +342,7 @@ async fn execute_direct_step(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 1_950).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 4_096).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -368,7 +368,7 @@ async fn execute_summarize_step(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 1_950).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 4_096).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
