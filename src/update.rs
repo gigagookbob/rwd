@@ -29,14 +29,18 @@ pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>
 }
 
 /// 현재 버전보다 새 버전이 있으면 안내 메시지를 출력합니다.
-/// 24시간 이내에 이미 체크했으면 캐시된 결과를 사용합니다 (GitHub API 호출 스킵).
-/// gh (GitHub CLI)와 동일한 패턴: 스탬프 파일에 마지막 체크 시각 + 최신 버전을 캐싱.
+/// 캐시 전략:
+/// - 캐시된 latest != current → 이미 업데이트가 있으므로 24시간 TTL 적용 (API 호출 절약)
+/// - 캐시된 latest == current → 새 버전이 나왔을 수 있으므로 항상 API 재확인
 pub async fn notify_if_update_available() {
-    // 캐시가 있고, 24시간 이내면 캐시된 버전으로 알림
     if let Some(cached) = crate::cache::load_update_check() {
         let now = chrono::Utc::now();
         let interval = chrono::Duration::hours(24);
-        if now - cached.checked_at < interval {
+        // 알릴 게 있으면(latest != current) 24시간 캐시 사용
+        // 알릴 게 없으면(latest == current) 캐시 무시하고 재확인
+        if cached.latest_version != CURRENT_VERSION
+            && now - cached.checked_at < interval
+        {
             print_update_notice(&cached.latest_version);
             return;
         }
