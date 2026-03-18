@@ -35,22 +35,28 @@ pub struct SessionInsight {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TilItem {
     /// 배운 것을 한 줄로
+    #[serde(default)]
     pub title: String,
     /// 왜 이게 필요했고 어떻게 적용했는지 1-2줄
+    #[serde(default)]
     pub detail: String,
 }
 
 /// 사용자의 선택 분기 (A vs B 중 왜 A를 선택했는가)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
+    #[serde(default)]
     pub what: String,
+    #[serde(default)]
     pub why: String,
 }
 
 /// 모델이 틀려서 사용자가 수정한 것
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Correction {
+    #[serde(default)]
     pub model_said: String,
+    #[serde(default)]
     pub user_corrected: String,
 }
 
@@ -63,8 +69,6 @@ pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerE
     let cleaned = strip_code_fences(raw_text);
 
     serde_json::from_str::<AnalysisResult>(&cleaned).map_err(|e| {
-        // 한글 등 멀티바이트 문자를 안전하게 자르기 위해 char_indices를 사용합니다.
-        // &str[..n]은 바이트 인덱스 기준이라 멀티바이트 문자 중간을 자르면 패닉합니다.
         let preview_end = raw_text
             .char_indices()
             .nth(200)
@@ -185,5 +189,41 @@ mod tests {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert!(result.sessions[0].til.is_empty());
+    }
+
+    // --- LLM 응답 필드 누락 내성 테스트 ---
+
+    #[test]
+    fn test_til_title_누락시_파싱_성공() {
+        // LLM이 title을 빼고 detail만 반환하는 경우
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"detail":"이유 설명"}]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].til.len(), 1);
+        assert_eq!(result.sessions[0].til[0].title, "");
+        assert_eq!(result.sessions[0].til[0].detail, "이유 설명");
+    }
+
+    #[test]
+    fn test_til_detail_누락시_파싱_성공() {
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"title":"배운 점"}]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].til[0].detail, "");
+    }
+
+    #[test]
+    fn test_decision_필드_누락시_파싱_성공() {
+        // LLM이 why를 빼고 what만 반환하는 경우
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[{"what":"serde 선택"}],"curiosities":[],"corrections":[],"til":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].decisions[0].what, "serde 선택");
+        assert_eq!(result.sessions[0].decisions[0].why, "");
+    }
+
+    #[test]
+    fn test_correction_필드_누락시_파싱_성공() {
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[{"model_said":"잘못된 설명"}],"til":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].corrections[0].model_said, "잘못된 설명");
+        assert_eq!(result.sessions[0].corrections[0].user_corrected, "");
     }
 }
