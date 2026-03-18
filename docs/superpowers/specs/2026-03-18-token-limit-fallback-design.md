@@ -41,10 +41,10 @@ analyze_entries(전체 엔트리)
 429는 분할로 해결되지 않음 (분할해도 분당 총 토큰이 동일하거나 초과). 대신 친절한 에러 메시지를 출력:
 
 ```
-API 요청 빈도(TPM) 제한을 초과했습니다.
+프롬프트가 너무 커서 OpenAI 토큰 제한을 초과했습니다.
 해결 방법:
   • rwd config provider anthropic  (Anthropic으로 전환)
-  • LLM 프로바이더 플랜 업그레이드  (TPM 한도 증가)
+  • OpenAI 플랜 업그레이드       (TPM 한도 증가)
 ```
 
 ### 에러 판별
