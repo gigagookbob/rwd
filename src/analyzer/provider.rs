@@ -152,11 +152,11 @@ impl LlmProvider {
     }
 
     /// API probe 호출로 사용자의 실제 rate limit을 확인한다.
-    /// 실패 시 default_generous()를 반환하여 single_shot으로 진행한다.
+    /// 반환: (RateLimits, probed) — probed가 true면 실제 확인, false면 기본값 fallback.
     pub async fn probe_rate_limits(
         &self,
         api_key: &str,
-    ) -> super::planner::RateLimits {
+    ) -> (super::planner::RateLimits, bool) {
         let result = match self {
             LlmProvider::Anthropic => {
                 super::anthropic::probe_anthropic_rate_limits(api_key).await
@@ -165,10 +165,10 @@ impl LlmProvider {
                 super::openai::probe_openai_rate_limits(api_key).await
             }
         };
-        result.unwrap_or_else(|| {
-            eprintln!("⚠ rate limit 확인 실패, 기본값으로 진행합니다.");
-            super::planner::RateLimits::default_generous()
-        })
+        match result {
+            Some(limits) => (limits, true),
+            None => (super::planner::RateLimits::default_generous(), false),
+        }
     }
 }
 

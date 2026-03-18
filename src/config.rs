@@ -1,6 +1,8 @@
 // config 모듈은 설정 파일(~/.config/rwd/config.toml)의 읽기/쓰기를 담당합니다.
 // 기존 .env 방식을 대체하여, rwd init / rwd config 커맨드로 설정을 관리합니다.
 
+use dialoguer::theme::ColorfulTheme;
+use dialoguer::{Confirm, Input, Select};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -193,12 +195,7 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
         }
         "api-key" => {
             config.llm.api_key = value.to_string();
-            let masked = if value.len() > 8 {
-                format!("{}***", &value[..8])
-            } else {
-                "***".to_string()
-            };
-            eprintln!("API 키 변경됨: {masked}");
+            eprintln!("API 키 변경됨: {}", mask_api_key(value));
         }
         _ => {
             return Err(format!(
@@ -208,6 +205,274 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     }
 
     save_config(&config, &config_file)?;
+    Ok(())
+}
+
+/// Esc를 지원하는 패스워드 입력.
+/// console::Term으로 키를 한 글자씩 읽어, 입력은 *로 표시합니다.
+/// Esc → None (취소), Enter → Some(입력값).
+/// console::Key는 터미널 키 이벤트를 Rust enum으로 표현합니다.
+fn read_password_with_esc(prompt: &str) -> Result<Option<String>, ConfigError> {
+    use console::{Key, Term};
+    let term = Term::stderr();
+    eprint!("{prompt}");
+    let mut input = String::new();
+    loop {
+        match term.read_key()? {
+            Key::Escape => {
+                term.write_line("")?;
+                return Ok(None);
+            }
+            Key::Enter => {
+                term.write_line("")?;
+                return Ok(Some(input));
+            }
+            Key::Backspace => {
+                if !input.is_empty() {
+                    input.pop();
+                    term.clear_chars(1)?;
+                }
+            }
+            Key::Char(c) => {
+                input.push(c);
+                eprint!("*");
+            }
+            _ => {}
+        }
+    }
+}
+
+/// 실제 API를 호출하여 provider/키 조합이 유효한지 검증합니다.
+/// 각 provider의 models 엔드포인트에 GET 요청을 보내 인증을 확인합니다.
+/// 네트워크 오류 시에도 프로그램이 중단되지 않도록 에러를 무시합니다.
+///
+/// reqwest::Client::builder().timeout()으로 최대 대기 시간을 5초로 제한합니다.
+async fn verify_api_key(provider: &str, api_key: &str) {
+    let dim = "\x1b[2m";
+    let green = "\x1b[32m";
+    let yellow = "\x1b[33m";
+    let reset = "\x1b[0m";
+
+    eprint!("{dim}  API 키 검증 중...{reset}");
+
+    let client = match reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(5))
+        .build()
+    {
+        Ok(c) => c,
+        Err(_) => {
+            eprintln!("\r{dim}  API 키 검증 건너뜀 (HTTP 클라이언트 생성 실패){reset}");
+            return;
+        }
+    };
+
+    let result = match provider {
+        "anthropic" => {
+            client
+                .get("https://api.anthropic.com/v1/models")
+                .header("x-api-key", api_key)
+                .header("anthropic-version", "2023-06-01")
+                .send()
+                .await
+        }
+        "openai" => {
+            client
+                .get("https://api.openai.com/v1/models")
+                .header("Authorization", format!("Bearer {api_key}"))
+                .send()
+                .await
+        }
+        _ => return,
+    };
+
+    // \r로 "검증 중..." 줄을 덮어씁니다.
+    match result {
+        Ok(resp) if resp.status().is_success() => {
+            eprintln!("\r{green}  ✓ API 키 확인됨{reset}                    ");
+        }
+        Ok(resp) => {
+            let status = resp.status().as_u16();
+            eprintln!("\r{yellow}  ⚠ API 키가 유효하지 않습니다 ({status}). 키를 확인하세요.{reset}");
+        }
+        Err(_) => {
+            eprintln!("\r{dim}  API 키 검증 건너뜀 (네트워크 오류){reset}       ");
+        }
+    }
+}
+
+/// API 키를 마스킹합니다.
+/// 8자 초과: 앞 8자 + ***, 4자 초과: 앞 4자 + ***, 그 외: ***
+fn mask_api_key(key: &str) -> String {
+    if key.len() > 8 {
+        format!("{}***", &key[..8])
+    } else if key.len() > 4 {
+        format!("{}***", &key[..4])
+    } else {
+        "***".to_string()
+    }
+}
+
+/// rwd config (인자 없이) — 대화형 메뉴로 설정을 변경합니다.
+///
+/// dialoguer 크레이트의 Select, Input 위젯을 사용합니다.
+/// Select: 화살표 키로 항목을 선택하는 위젯 — 키보드만으로 조작합니다.
+/// Input: 텍스트를 직접 입력받는 위젯 — .default()로 현재값을 기본값으로 제안합니다.
+/// API 키 입력은 console::Term으로 직접 구현하여 Esc 취소를 지원합니다.
+pub async fn run_config_interactive() -> Result<(), ConfigError> {
+    let config_file = config_path()?;
+
+    if !config_file.exists() {
+        return Err("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.".into());
+    }
+
+    let mut config = load_config(&config_file)?;
+    let theme = ColorfulTheme::default();
+
+    // ANSI 색상 코드 — 메뉴 항목에 키 이름과 현재값을 구분합니다.
+    let cyan = "\x1b[36m";
+    let dim = "\x1b[2m";
+    let reset = "\x1b[0m";
+
+    eprintln!("{dim}  ↑↓ 이동 · Enter 선택 · Esc 나가기{reset}");
+
+    // loop로 메뉴를 반복합니다 — Esc나 "나가기"를 선택하면 break로 탈출합니다.
+    loop {
+        // 매 반복마다 현재 설정값으로 메뉴를 다시 구성합니다.
+        let redactor_status = if config.is_redactor_enabled() { "on" } else { "off" };
+        let items = vec![
+            format!("{cyan}provider{reset}      {dim}[{}]{reset}", config.llm.provider),
+            format!("{cyan}api-key{reset}       {dim}[{}]{reset}", mask_api_key(&config.llm.api_key)),
+            format!("{cyan}output-path{reset}   {dim}[{}]{reset}", config.output.path),
+            format!("{cyan}redactor{reset}      {dim}[{}]{reset}", redactor_status),
+            format!("{dim}나가기{reset}"),
+        ];
+
+        // interact_opt()는 Esc를 누르면 Ok(None)을 반환합니다.
+        // interact()와 달리 취소 동작을 지원하는 메서드입니다.
+        let selection = Select::with_theme(&theme)
+            .with_prompt("변경할 설정을 선택하세요")
+            .items(&items)
+            .default(0)
+            .interact_opt()?;
+
+        // None이면 Esc — 루프 탈출
+        let Some(selection) = selection else { break };
+
+        let green = "\x1b[32m";
+
+        match selection {
+            // provider — Select로 선택지 제공
+            0 => {
+                let old = config.llm.provider.clone();
+                let providers = ["anthropic", "openai"];
+                let current_idx = providers
+                    .iter()
+                    .position(|&p| p == old)
+                    .unwrap_or(0);
+
+                // 하위 Select도 interact_opt()로 Esc 뒤로가기를 지원합니다.
+                let Some(chosen) = Select::with_theme(&theme)
+                    .with_prompt("LLM 프로바이더")
+                    .items(&providers)
+                    .default(current_idx)
+                    .interact_opt()?
+                else {
+                    continue;
+                };
+
+                let new_provider = providers[chosen];
+                if new_provider == old {
+                    eprintln!("{dim}  변경 없음{reset}\n");
+                } else {
+                    config.llm.provider = new_provider.to_string();
+                    save_config(&config, &config_file)?;
+                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old}{reset} → {new_provider}");
+                    verify_api_key(&config.llm.provider, &config.llm.api_key).await;
+                    eprintln!();
+                }
+            }
+            // api-key — 커스텀 패스워드 입력 (Esc = 취소)
+            1 => {
+                let Some(new_key) = read_password_with_esc("  새 API 키: ")? else {
+                    continue;
+                };
+                let new_key = new_key.trim().to_string();
+
+                if new_key.is_empty() {
+                    continue;
+                }
+                // Confirm 위젯: y/n 또는 yes/no로 확인을 받습니다.
+                // .default(false)로 기본값을 "no"로 설정하여 실수 방지합니다.
+                let confirmed = Confirm::with_theme(&theme)
+                    .with_prompt("API 키를 변경하시겠습니까?")
+                    .default(false)
+                    .interact()?;
+                if !confirmed {
+                    continue;
+                }
+                let old_masked = mask_api_key(&config.llm.api_key);
+                config.llm.api_key = new_key;
+                save_config(&config, &config_file)?;
+                eprintln!(
+                    "{green}  ✓ 변경됨{reset} {dim}{old_masked}{reset} → {}",
+                    mask_api_key(&config.llm.api_key)
+                );
+                verify_api_key(&config.llm.provider, &config.llm.api_key).await;
+                eprintln!();
+            }
+            // output-path — Input으로 텍스트 입력 (현재값을 기본값으로)
+            2 => {
+                let old = config.output.path.clone();
+                let new_path: String = Input::with_theme(&theme)
+                    .with_prompt("마크다운 저장 경로")
+                    .default(old.clone())
+                    .interact_text()?;
+
+                if new_path == old {
+                    eprintln!("{dim}  변경 없음{reset}\n");
+                } else {
+                    config.output.path = new_path.clone();
+                    save_config(&config, &config_file)?;
+                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old}{reset} → {new_path}\n");
+                }
+            }
+            // redactor — Select로 on/off 선택
+            3 => {
+                let old_enabled = config.is_redactor_enabled();
+                let options = ["on", "off"];
+                let current_idx = if old_enabled { 0 } else { 1 };
+
+                let Some(chosen) = Select::with_theme(&theme)
+                    .with_prompt("민감 정보 마스킹")
+                    .items(&options)
+                    .default(current_idx)
+                    .interact_opt()?
+                else {
+                    continue;
+                };
+
+                let enabled = chosen == 0;
+                if enabled == old_enabled {
+                    eprintln!("{dim}  변경 없음{reset}\n");
+                } else {
+                    config.redactor = Some(RedactorConfig { enabled });
+                    save_config(&config, &config_file)?;
+                    let old_label = if old_enabled { "on" } else { "off" };
+                    let new_label = options[chosen];
+                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old_label}{reset} → {new_label}\n");
+                }
+            }
+            // 나가기 — Select가 출력한 "✔ ... 나가기" 줄을 지웁니다.
+            // console::Term::clear_last_lines()는 지정한 줄 수만큼 터미널 출력을 지웁니다.
+            4 => {
+                console::Term::stderr().clear_last_lines(1)?;
+                break;
+            }
+            _ => unreachable!(),
+        }
+    }
+
+    eprintln!("\x1b[32m설정이 저장되었습니다.\x1b[0m \x1b[2m{}\x1b[0m", config_file.display());
     Ok(())
 }
 
