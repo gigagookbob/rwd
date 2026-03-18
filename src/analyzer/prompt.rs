@@ -183,10 +183,10 @@ pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
             LogEntry::System(e) => e.session_id.as_deref(),
             LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
         };
-        if let Some(session_id) = id {
-            if seen.insert(session_id.to_string()) {
-                ids.push(session_id.to_string());
-            }
+        if let Some(session_id) = id
+            && seen.insert(session_id.to_string())
+        {
+            ids.push(session_id.to_string());
         }
     }
     ids
