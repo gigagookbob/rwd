@@ -13,6 +13,17 @@ mod update;
 use clap::Parser;
 use cli::Commands;
 
+// ANSI 색상 코드 — 라이트/다크 터미널 양쪽에서 잘 보이는 색상만 사용합니다.
+// \x1b[Nm 형식으로, N이 색상 코드입니다 (ANSI escape sequence).
+const CYAN: &str = "\x1b[36m";
+const BRIGHT_BLUE: &str = "\x1b[94m";
+const YELLOW: &str = "\x1b[33m";
+const MAGENTA: &str = "\x1b[35m";
+const DIM: &str = "\x1b[2m";
+const RED: &str = "\x1b[31m";
+const GREEN: &str = "\x1b[32m";
+const RESET: &str = "\x1b[0m";
+
 /// #[tokio::main]은 async fn main()을 동기 main()으로 변환하는 속성 매크로입니다.
 /// 내부적으로 tokio 런타임을 생성하고, async 블록을 실행합니다.
 /// tokio는 Rust의 비동기 런타임으로, async/await를 실행하는 "엔진" 역할을 합니다.
@@ -99,33 +110,23 @@ async fn run_today() -> Result<(), parser::ParseError> {
     let codex_count = codex_sessions.len();
 
     let now = chrono::Local::now();
-    println!("\n=== rwd today ({}) ===", now.format("%Y-%m-%d %H:%M"));
 
-    // === Claude Code 요약 출력 ===
-    if !claude_entries.is_empty() {
-        let summaries = parser::summarize_entries(&claude_entries);
-        let earliest = claude_earliest_time(&claude_entries);
-        let time_range = format_time_range(earliest, now);
+    // === 로고 배너 출력 ===
+    print_logo_banner();
 
-        println!("\nClaude Code");
-        println!("{time_range}");
-        println!("총 세션: {}", summaries.len());
-
-        let (total_in, total_out) = claude_total_tokens(&summaries);
-        println!("총 in token: {} | 총 out token: {}", format_number(total_in), format_number(total_out));
-    }
-
-    // === Codex 요약 출력 ===
-    println!("\nCodex");
-    if codex_sessions.is_empty() {
-        println!("오늘 진행된 Codex 세션은 없습니다.");
+    // === 정보 박스 출력 ===
+    let summaries = if !claude_entries.is_empty() {
+        Some(parser::summarize_entries(&claude_entries))
     } else {
-        let earliest = codex_earliest_time(&codex_sessions);
-        let time_range = format_time_range(earliest, now);
-        println!("{time_range}");
-        println!("총 세션: {}", codex_sessions.len());
-        println!("총 in token: - | 총 out token: -");
-    }
+        None
+    };
+
+    print_info_box(
+        now,
+        summaries.as_deref(),
+        &claude_entries,
+        &codex_sessions,
+    );
 
     // === 캐시 확인 ===
     // 엔트리 수가 동일하면 이전 분석 결과를 재사용하여 LLM 호출을 생략합니다.
@@ -141,8 +142,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
             .map(|(name, result)| (name.as_str(), result))
             .collect();
         for (name, analysis) in &source_refs {
-            println!("\n=== {name} 인사이트 ===");
-            print_insights(analysis);
+            print_insights(name, analysis);
         }
         save_combined_analysis(&source_refs, today);
         return Ok(());
@@ -152,7 +152,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
-    println!("\n{provider_label} API로 인사이트 분석 중...");
+    println!("\n{MAGENTA}{provider_label} API로 인사이트 분석 중...{RESET}");
 
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
@@ -195,8 +195,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
             .map(|(name, result)| (name.as_str(), result))
             .collect();
         for (name, analysis) in &source_refs {
-            println!("\n=== {name} 인사이트 ===");
-            print_insights(analysis);
+            print_insights(name, analysis);
         }
         save_combined_analysis(&source_refs, today);
 
@@ -354,7 +353,7 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
 /// Codex 전용 사용자도 지원하기 위해 빈 결과로 진행합니다.
 fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEntry> {
     match parser::discover_log_dir() {
-        Ok(dir) => println!("Scanning Claude Code: {}", dir.display()),
+        Ok(_) => {}
         Err(_) => return Vec::new(),
     }
 
@@ -379,10 +378,7 @@ fn collect_codex_sessions(
     today: chrono::NaiveDate,
 ) -> Vec<(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)> {
     let sessions_dir = match parser::codex::discover_codex_sessions_dir() {
-        Ok(dir) => {
-            println!("Scanning Codex: {}", dir.display());
-            dir
-        }
+        Ok(dir) => dir,
         Err(_) => return Vec::new(),
     };
 
@@ -493,35 +489,171 @@ fn save_combined_analysis(
     }
 }
 
-/// 분석 결과를 터미널에 출력합니다.
-fn print_insights(analysis: &analyzer::AnalysisResult) {
-    println!("\n=== 인사이트 분석 결과 ===");
+/// RWD 클래식 블록 ASCII 로고를 출력합니다.
+/// ANSI Cyan 색상을 사용하며, 버전은 Dim 처리합니다.
+fn print_logo_banner() {
+    let version = env!("CARGO_PKG_VERSION");
+    println!();
+    println!("{CYAN}  ██████  ██     ██ ██████{RESET}");
+    println!("{CYAN}  ██   ██ ██     ██ ██   ██{RESET}");
+    println!("{CYAN}  ██████  ██  █  ██ ██   ██{RESET}     {DIM}rewind your day  v{version}{RESET}");
+    println!("{CYAN}  ██   ██ ██ ███ ██ ██   ██{RESET}");
+    println!("{CYAN}  ██   ██  ███ ███  ██████{RESET}");
+}
+
+/// 날짜, 세션 요약 정보를 유니코드 박스 테이블로 출력합니다.
+/// 박스 드로잉 문자(─│┌┐└┘├┤)로 테이블을 구성합니다.
+/// 박스 너비는 내용 중 가장 긴 줄에 맞춰 동적으로 결정됩니다.
+fn print_info_box(
+    now: chrono::DateTime<chrono::Local>,
+    claude_summaries: Option<&[parser::claude::SessionSummary]>,
+    claude_entries: &[parser::claude::LogEntry],
+    codex_sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+) {
+    // 먼저 모든 행의 텍스트를 준비합니다. (색상 이름, 표시 텍스트) 쌍의 Vec.
+    // "sep"은 구분선을 의미합니다.
+    let date_str = format!("{}", now.format("%Y-%m-%d %H:%M"));
+
+    let mut rows: Vec<(&str, String)> = Vec::new();
+    rows.push(("plain", date_str));
+
+    // Claude Code 섹션
+    if let Some(summaries) = claude_summaries {
+        rows.push(("sep", String::new()));
+        rows.push(("blue", "Claude Code".to_string()));
+
+        let earliest = claude_earliest_time(claude_entries);
+        let time_range = format_time_range(earliest, now);
+        rows.push(("plain", time_range));
+
+        let (total_in, total_out) = claude_total_tokens(summaries);
+        rows.push(("plain", format!(
+            "세션 수 {}  in {}  out {}",
+            summaries.len(),
+            format_number(total_in),
+            format_number(total_out)
+        )));
+    }
+
+    // Codex 섹션
+    rows.push(("sep", String::new()));
+    rows.push(("yellow", "Codex".to_string()));
+    if !codex_sessions.is_empty() {
+        let earliest = codex_earliest_time(codex_sessions);
+        let time_range = format_time_range(earliest, now);
+        rows.push(("plain", time_range));
+        rows.push(("plain", format!("세션 수 {}", codex_sessions.len())));
+    } else {
+        rows.push(("plain", "세션 없음".to_string()));
+    }
+
+    // 가장 긴 텍스트의 표시 너비를 기준으로 박스 너비를 결정합니다.
+    // unicode_display_width()로 한글 등 전각 문자를 2칸으로 계산합니다.
+    let content_max = rows.iter()
+        .filter(|(kind, _)| *kind != "sep")
+        .map(|(_, text)| unicode_display_width(text))
+        .max()
+        .unwrap_or(20);
+    let w = content_max + 4; // 양쪽 여백 2칸씩
+
+    let line = "─".repeat(w);
+    println!("\n  ┌{line}┐");
+
+    for (kind, text) in &rows {
+        match *kind {
+            "sep" => println!("  ├{line}┤"),
+            "blue" => {
+                let pad = w - 2 - unicode_display_width(text);
+                println!("  │  {BRIGHT_BLUE}{text}{RESET}{:pad$}│", "");
+            }
+            "yellow" => {
+                let pad = w - 2 - unicode_display_width(text);
+                println!("  │  {YELLOW}{text}{RESET}{:pad$}│", "");
+            }
+            _ => {
+                let pad = w - 2 - unicode_display_width(text);
+                println!("  │  {text}{:pad$}│", "");
+            }
+        }
+    }
+
+    println!("  └{line}┘");
+}
+
+/// 터미널 너비를 가져옵니다.
+/// /dev/tty를 stdin으로 열어서 `stty size`에 전달합니다.
+/// 서브프로세스의 stdin이 파이프가 아닌 실제 터미널을 가리켜야 정확한 너비를 얻을 수 있습니다.
+fn terminal_width() -> usize {
+    if let Ok(tty) = std::fs::File::open("/dev/tty") {
+        if let Ok(output) = std::process::Command::new("stty")
+            .arg("size")
+            .stdin(tty)
+            .output()
+        {
+            let s = String::from_utf8_lossy(&output.stdout);
+            let parts: Vec<&str> = s.split_whitespace().collect();
+            if let Some(cols) = parts.get(1).and_then(|c| c.parse::<usize>().ok())
+                && cols > 0
+            {
+                return cols;
+            }
+        }
+    }
+    80
+}
+
+/// 문자열의 터미널 표시 너비를 계산합니다.
+/// ASCII 문자는 1칸, 한글 등 전각 문자는 2칸으로 계산합니다.
+/// char::is_ascii()로 ASCII 여부를 판별합니다 (Rust Book Ch.8 참조).
+fn unicode_display_width(s: &str) -> usize {
+    s.chars().map(|c| if c.is_ascii() { 1 } else { 2 }).sum()
+}
+
+/// 분석 결과를 풀 박스 스타일로 터미널에 출력합니다.
+/// 소스별 유니코드 박스로 감싸고, 세션별로 ▸ 마커를 사용합니다.
+fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
+    let term_w = terminal_width();
+    // 소스 이름 뒤에 남은 공간만큼 선을 채웁니다.
+    // "  ┌─ " (5) + source_name + " " (1) + 선 = term_w
+    let header_used = 5 + unicode_display_width(source_name) + 1;
+    let line_len = if term_w > header_used { term_w - header_used } else { 20 };
+    let line = "─".repeat(line_len);
+    println!("\n{CYAN}  ┌─ {source_name} {line}{RESET}");
 
     for session in &analysis.sessions {
-        println!("\n--- Session: {} ---", session.session_id);
-        println!("요약: {}", session.work_summary);
+        // 세션 ID는 앞 8자만 표시 (가독성)
+        let id_short = if session.session_id.len() >= 8 {
+            &session.session_id[..8]
+        } else {
+            &session.session_id
+        };
+        println!("\n{BRIGHT_BLUE}  ▸ Session: {id_short}{RESET}");
+        println!("  요약: {}", session.work_summary);
 
         if !session.decisions.is_empty() {
-            println!("\n선택 분기:");
+            println!("\n  {YELLOW}선택 분기{RESET}");
             for d in &session.decisions {
-                println!("  - {}", d.what);
-                println!("    이유: {}", d.why);
+                println!("  • {}", d.what);
+                println!("    {DIM}→ {}{RESET}", d.why);
             }
         }
 
         if !session.curiosities.is_empty() {
-            println!("\n궁금/헷갈렸던 것:");
+            println!("\n  {YELLOW}궁금/헷갈렸던 것{RESET}");
             for c in &session.curiosities {
-                println!("  - {c}");
+                println!("  • {c}");
             }
         }
 
         if !session.corrections.is_empty() {
-            println!("\n모델 수정:");
+            println!("\n  {YELLOW}모델 수정{RESET}");
             for c in &session.corrections {
-                println!("  - 모델: {}", c.model_said);
-                println!("    수정: {}", c.user_corrected);
+                println!("  {RED}\u{2717} {}{RESET}", c.model_said);
+                println!("  {GREEN}\u{2713} {}{RESET}", c.user_corrected);
             }
         }
     }
+
+    let bottom_line = "─".repeat(if term_w > 2 { term_w - 2 } else { 20 });
+    println!("\n{CYAN}  └{bottom_line}{RESET}");
 }
