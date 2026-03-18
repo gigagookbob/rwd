@@ -584,19 +584,18 @@ fn print_info_box(
 /// /dev/tty를 stdin으로 열어서 `stty size`에 전달합니다.
 /// 서브프로세스의 stdin이 파이프가 아닌 실제 터미널을 가리켜야 정확한 너비를 얻을 수 있습니다.
 fn terminal_width() -> usize {
-    if let Ok(tty) = std::fs::File::open("/dev/tty") {
-        if let Ok(output) = std::process::Command::new("stty")
+    if let Ok(tty) = std::fs::File::open("/dev/tty")
+        && let Ok(output) = std::process::Command::new("stty")
             .arg("size")
             .stdin(tty)
             .output()
+    {
+        let s = String::from_utf8_lossy(&output.stdout);
+        let parts: Vec<&str> = s.split_whitespace().collect();
+        if let Some(cols) = parts.get(1).and_then(|c| c.parse::<usize>().ok())
+            && cols > 0
         {
-            let s = String::from_utf8_lossy(&output.stdout);
-            let parts: Vec<&str> = s.split_whitespace().collect();
-            if let Some(cols) = parts.get(1).and_then(|c| c.parse::<usize>().ok())
-                && cols > 0
-            {
-                return cols;
-            }
+            return cols;
         }
     }
     80
