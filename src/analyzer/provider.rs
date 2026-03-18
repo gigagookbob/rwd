@@ -118,12 +118,57 @@ impl LlmProvider {
         }
     }
 
+    /// max_tokens를 지정할 수 있는 API 호출.
+    /// 요약 호출 시 max_tokens를 2000으로 제한한다.
+    pub async fn call_api_with_max_tokens(
+        &self,
+        api_key: &str,
+        system_prompt: &str,
+        conversation_text: &str,
+        max_tokens: u32,
+    ) -> Result<String, super::AnalyzerError> {
+        match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::call_anthropic_api_with_max_tokens(
+                    api_key, system_prompt, conversation_text, max_tokens,
+                )
+                .await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::call_openai_api_with_max_tokens(
+                    api_key, system_prompt, conversation_text, max_tokens,
+                )
+                .await
+            }
+        }
+    }
+
     /// 프로바이더의 표시 이름을 반환합니다.
     pub fn display_name(&self) -> &'static str {
         match self {
             LlmProvider::Anthropic => "Claude",
             LlmProvider::OpenAi => "OpenAI",
         }
+    }
+
+    /// API probe 호출로 사용자의 실제 rate limit을 확인한다.
+    /// 실패 시 default_generous()를 반환하여 single_shot으로 진행한다.
+    pub async fn probe_rate_limits(
+        &self,
+        api_key: &str,
+    ) -> super::planner::RateLimits {
+        let result = match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::probe_anthropic_rate_limits(api_key).await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::probe_openai_rate_limits(api_key).await
+            }
+        };
+        result.unwrap_or_else(|| {
+            eprintln!("⚠ rate limit 확인 실패, 기본값으로 진행합니다.");
+            super::planner::RateLimits::default_generous()
+        })
     }
 }
 
