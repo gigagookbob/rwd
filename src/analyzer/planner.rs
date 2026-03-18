@@ -30,7 +30,6 @@ impl RateLimits {
 pub struct SessionEstimate {
     pub session_id: String,
     pub estimated_tokens: u64,
-    pub entry_count: usize,
 }
 
 /// 개별 실행 스텝의 전략.
@@ -132,8 +131,8 @@ mod tests {
             requests_per_minute: 100,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000, entry_count: 5 },
-            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000, entry_count: 10 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000 },
+            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(plan.is_single_shot);
@@ -149,8 +148,8 @@ mod tests {
             requests_per_minute: 50,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000, entry_count: 5 },
-            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000, entry_count: 10 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000 },
+            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(!plan.is_single_shot);
@@ -167,7 +166,7 @@ mod tests {
             requests_per_minute: 50,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000, entry_count: 20 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(!plan.is_single_shot);
@@ -179,7 +178,7 @@ mod tests {
     fn test_build_plan_default_generous_is_single_shot() {
         let limits = RateLimits::default_generous();
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000, entry_count: 20 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(plan.is_single_shot);
@@ -193,7 +192,7 @@ mod tests {
             requests_per_minute: 50,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 31_000, entry_count: 15 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 31_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(!plan.is_single_shot);
@@ -207,7 +206,7 @@ mod tests {
             requests_per_minute: 50,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 30_000, entry_count: 15 },
+            SessionEstimate { session_id: "s1".into(), estimated_tokens: 30_000 },
         ];
         let plan = build_execution_plan(&limits, &estimates);
         assert!(plan.is_single_shot);

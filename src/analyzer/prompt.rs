@@ -234,7 +234,6 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
 
     for session_id in &session_ids {
         let mut total_chars: u64 = 0;
-        let mut entry_count: usize = 0;
 
         for entry in entries {
             // 해당 세션의 엔트리만 필터링
@@ -248,8 +247,6 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
             if eid != Some(session_id.as_str()) {
                 continue;
             }
-
-            entry_count += 1;
 
             match entry {
                 LogEntry::User(e) => {
@@ -277,7 +274,6 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
         estimates.push(SessionEstimate {
             session_id: session_id.clone(),
             estimated_tokens,
-            entry_count,
         });
     }
 
@@ -426,6 +422,6 @@ mod tests {
         assert_eq!(estimates[0].session_id, "s1");
         assert_eq!(estimates[1].session_id, "s2");
         assert!(estimates[0].estimated_tokens > 0);
-        assert_eq!(estimates[0].entry_count, 1);
+        assert!(estimates[0].estimated_tokens > 0);
     }
 }
