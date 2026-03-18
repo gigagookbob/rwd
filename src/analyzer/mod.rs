@@ -73,3 +73,57 @@ pub async fn analyze_codex_entries(
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
+
+/// API 에러가 컨텍스트 윈도우 초과(400)인지 판별합니다.
+/// 에러 메시지에 "400"과 ("token" 또는 "context")가 포함되면 컨텍스트 제한 에러로 판단합니다.
+/// 주의: 에러 메시지 형식에 의존하므로, M5에서 구조화된 에러 타입으로 전환 예정.
+fn is_context_limit_error(err_msg: &str) -> bool {
+    let lower = err_msg.to_lowercase();
+    lower.contains("400") && (lower.contains("token") || lower.contains("context"))
+}
+
+/// API 에러가 TPM/RPM 제한 초과(429)인지 판별합니다.
+fn is_rate_limit_error(err_msg: &str) -> bool {
+    err_msg.contains("429")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_is_context_limit_error_400_token_포함시_true() {
+        let err = "API 요청 실패 (400 Bad Request): {\"error\":{\"message\":\"maximum context length is 128000 tokens\"}}";
+        assert!(is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_400_context_포함시_true() {
+        let err = "OpenAI API 요청 실패 (400 Bad Request): {\"error\":{\"code\":\"context_length_exceeded\"}}";
+        assert!(is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_429_에러는_false() {
+        let err = "OpenAI API 요청 실패 (429 Too Many Requests): rate limit";
+        assert!(!is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_context_limit_error_일반_에러는_false() {
+        let err = "API 요청 실패 (500 Internal Server Error): server error";
+        assert!(!is_context_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_rate_limit_error_429_포함시_true() {
+        let err = "OpenAI API 요청 실패 (429 Too Many Requests): {\"error\":{\"message\":\"Rate limit exceeded\"}}";
+        assert!(is_rate_limit_error(err));
+    }
+
+    #[test]
+    fn test_is_rate_limit_error_400_에러는_false() {
+        let err = "API 요청 실패 (400 Bad Request): token limit";
+        assert!(!is_rate_limit_error(err));
+    }
+}
