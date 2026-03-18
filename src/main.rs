@@ -162,14 +162,14 @@ async fn run_today() -> Result<(), parser::ParseError> {
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
 
-    // Claude 분석 — 실패 시 전체 분석 중단 (all-or-nothing)
+    // Claude 분석 — 내부에서 rate limit 확인 + plan 표시 + 스피너 관리
     if !claude_entries.is_empty() {
         let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled).await?;
         total_redact.merge(redact_result);
         sources.push(("Claude Code".to_string(), result));
     }
 
-    // Codex 분석 — 실패 시 전체 분석 중단 (all-or-nothing)
+    // Codex 분석 — Claude 스피너가 끝난 후 실행, 빠르므로 별도 스피너 불필요
     for (summary, entries) in &codex_sessions {
         let (result, redact_result) = analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled).await?;
         total_redact.merge(redact_result);
@@ -201,6 +201,8 @@ async fn run_today() -> Result<(), parser::ParseError> {
         if let Err(e) = cache::save_cache(&cache_data, today) {
             eprintln!("캐시 저장 실패: {e}");
         }
+
+        println!("\n{GREEN}오늘의 daily rewind가 완성되었습니다!{RESET}");
     }
 
     Ok(())
