@@ -18,7 +18,11 @@ pub struct Cli {
 #[derive(Subcommand)]
 pub enum Commands {
     /// 오늘의 세션 로그를 분석합니다
-    Today,
+    Today {
+        /// 세션별 실행 계획 상세 출력
+        #[arg(long, short)]
+        verbose: bool,
+    },
     /// 초기 설정을 수행합니다 (API 키, 출력 경로)
     Init,
     /// 설정 값을 변경합니다 (인자 없이 실행하면 대화형 메뉴)
