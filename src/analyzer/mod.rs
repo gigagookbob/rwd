@@ -54,7 +54,7 @@ pub async fn analyze_entries(
                 return Err(
                     "API 요청 빈도(TPM) 제한을 초과했습니다.\n\
                      해결 방법:\n  \
-                     • rwd config provider anthropic  (Anthropic으로 전환)\n  \
+                     • rwd init                       (다른 프로바이더로 재설정)\n  \
                      • LLM 프로바이더 플랜 업그레이드  (TPM 한도 증가)"
                         .into(),
                 );

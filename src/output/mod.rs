@@ -31,20 +31,20 @@ pub fn load_vault_path() -> Result<PathBuf, OutputError> {
 ///
 /// Path::join()은 경로와 파일명을 결합하여 새 PathBuf를 반환합니다 (Rust Book Ch.12 참조).
 /// std::fs::write()는 파일 내용 전체를 한 번에 기록합니다 — 파일이 없으면 생성하고, 있으면 덮어씁니다.
+/// 날짜 기반 파일명으로 Markdown 내용을 출력 경로에 저장합니다.
+/// output.path가 이미 최종 폴더(예: vault/Daily)를 포함하므로, 추가 하위 폴더를 붙이지 않습니다.
 pub fn save_to_vault(
     vault_path: &Path,
     date: NaiveDate,
     content: &str,
 ) -> Result<PathBuf, OutputError> {
-    // Obsidian Daily Notes 플러그인은 "Daily/" 하위 폴더를 참조합니다.
     // create_dir_all()은 경로의 모든 중간 디렉토리를 재귀적으로 생성합니다 —
     // 이미 존재하면 에러 없이 넘어갑니다 (Rust Book Ch.12 참조).
-    let daily_dir = vault_path.join("Daily");
-    std::fs::create_dir_all(&daily_dir)?;
+    std::fs::create_dir_all(vault_path)?;
 
     // 파일명: "2026-03-11.md" — NaiveDate의 Display 트레이트가 "YYYY-MM-DD" 형식을 제공합니다.
     let filename = format!("{date}.md");
-    let file_path = daily_dir.join(&filename);
+    let file_path = vault_path.join(&filename);
 
     std::fs::write(&file_path, content)?;
 
@@ -71,16 +71,15 @@ mod tests {
 
         let saved_path = result.expect("저장 성공");
         assert!(saved_path.exists());
-        // Daily/ 하위에 저장되었는지 확인
-        assert!(saved_path.starts_with(temp_dir.join("Daily")));
+        // 지정한 경로에 직접 저장되었는지 확인
+        assert!(saved_path.starts_with(&temp_dir));
         assert_eq!(
             std::fs::read_to_string(&saved_path).expect("파일 읽기"),
             content
         );
 
-        // 테스트 후 정리 — 생성한 파일과 디렉토리를 삭제합니다.
+        // 테스트 후 정리
         std::fs::remove_file(&saved_path).ok();
-        std::fs::remove_dir(temp_dir.join("Daily")).ok();
         std::fs::remove_dir(&temp_dir).ok();
     }
 }
