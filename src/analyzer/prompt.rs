@@ -3,6 +3,7 @@
 // 네트워크 호출 없이 순수 데이터 변환만 수행하므로 단위 테스트가 용이합니다.
 // Text 블록만 포함하고, Thinking/ToolUse/ToolResult는 제외합니다 (너무 장황하므로).
 
+use super::planner::SessionEstimate;
 use crate::parser::claude::{ContentBlock, LogEntry};
 use crate::parser::codex::CodexEntry;
 use std::collections::HashMap;
@@ -192,6 +193,72 @@ pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
     ids
 }
 
+/// 시스템 프롬프트의 추정 토큰 수 (provider::SYSTEM_PROMPT 기준 사전 계산).
+pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 800;
+
+/// 텍스트의 토큰 수를 간이 추정한다.
+/// 한국어는 음절당 ~1토큰이므로, 글자 수 ÷ 2는 보수적 추정이다.
+pub fn estimate_tokens(text: &str) -> u64 {
+    (text.chars().count() as u64) / 2
+}
+
+/// 세션별 토큰 추정 결과를 반환한다.
+pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
+    let session_ids = extract_session_ids(entries);
+    let mut estimates = Vec::new();
+
+    for session_id in &session_ids {
+        let mut total_chars: u64 = 0;
+        let mut entry_count: usize = 0;
+
+        for entry in entries {
+            // 해당 세션의 엔트리만 필터링
+            let eid = match entry {
+                LogEntry::User(u) => Some(u.session_id.as_str()),
+                LogEntry::Assistant(a) => Some(a.session_id.as_str()),
+                LogEntry::Progress(p) => Some(p.session_id.as_str()),
+                LogEntry::System(s) => s.session_id.as_deref(),
+                LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
+            };
+            if eid != Some(session_id.as_str()) {
+                continue;
+            }
+
+            entry_count += 1;
+
+            match entry {
+                LogEntry::User(e) => {
+                    // extract_user_text로 실제 대화 텍스트만 추출 (JSON 구조 문자 제외)
+                    if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
+                        total_chars += text.chars().count() as u64;
+                    }
+                }
+                LogEntry::Assistant(e) => {
+                    if let Some(msg) = &e.message {
+                        for block in &msg.content {
+                            if let ContentBlock::Text { text } = block
+                                && let Some(t) = text
+                            {
+                                total_chars += t.chars().count() as u64;
+                            }
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let estimated_tokens = total_chars / 2 + SYSTEM_PROMPT_ESTIMATED_TOKENS;
+        estimates.push(SessionEstimate {
+            session_id: session_id.clone(),
+            estimated_tokens,
+            entry_count,
+        });
+    }
+
+    estimates
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -302,5 +369,38 @@ mod tests {
         let entries: Vec<CodexEntry> = vec![];
         let result = build_codex_prompt(&entries, "s1");
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_estimate_tokens_한국어() {
+        assert_eq!(super::estimate_tokens("안녕하세요"), 2);
+    }
+
+    #[test]
+    fn test_estimate_tokens_영어() {
+        assert_eq!(super::estimate_tokens("hello world"), 5);
+    }
+
+    #[test]
+    fn test_estimate_tokens_빈문자열() {
+        assert_eq!(super::estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_estimate_sessions_세션별_추정() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"안녕하세요 반갑습니다"}}"#,
+            ).unwrap(),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"두번째 세션입니다"}}"#,
+            ).unwrap(),
+        ];
+        let estimates = super::estimate_sessions(&entries);
+        assert_eq!(estimates.len(), 2);
+        assert_eq!(estimates[0].session_id, "s1");
+        assert_eq!(estimates[1].session_id, "s2");
+        assert!(estimates[0].estimated_tokens > 0);
+        assert_eq!(estimates[0].entry_count, 1);
     }
 }
