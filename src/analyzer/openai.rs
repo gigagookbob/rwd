@@ -66,6 +66,7 @@ pub async fn call_openai_api(
     api_key: &str,
     system_prompt: &str,
     conversation_text: &str,
+    max_tokens: u32,
 ) -> Result<String, super::AnalyzerError> {
     let client = reqwest::Client::new();
 
@@ -83,7 +84,7 @@ pub async fn call_openai_api(
                 content: conversation_text.to_string(),
             },
         ],
-        max_tokens: 16384,
+        max_tokens,
     };
 
     // Authorization: Bearer 헤더 — OpenAI의 인증 방식입니다.

@@ -62,12 +62,13 @@ pub async fn call_anthropic_api(
     api_key: &str,
     system_prompt: &str,
     conversation_text: &str,
+    max_tokens: u32,
 ) -> Result<String, super::AnalyzerError> {
     let client = reqwest::Client::new();
 
     let request_body = ApiRequest {
         model: MODEL.to_string(),
-        max_tokens: 16384,
+        max_tokens,
         system: system_prompt.to_string(),
         messages: vec![ApiMessage {
             role: "user".to_string(),

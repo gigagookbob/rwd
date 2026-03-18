@@ -104,7 +104,7 @@ pub async fn analyze_entries(
     let estimates = prompt::estimate_sessions(entries);
 
     // 3. Plan: 실행 계획 수립
-    let plan = planner::build_execution_plan(&limits, &estimates);
+    let plan = planner::build_execution_plan(&limits, &estimates, provider.max_output_tokens());
 
     // 4. Display: 계획 출력
     if plan.is_single_shot {
@@ -141,7 +141,7 @@ pub async fn analyze_entries(
         } else {
             (prompt_text, RedactResult::empty())
         };
-        let raw_response = provider.call_api(&api_key, &final_prompt).await?;
+        let raw_response = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32).await?;
         stop_spinner(sp);
         let result = insight::parse_response(&raw_response)?;
         Ok((result, redact_result))
@@ -186,7 +186,7 @@ pub async fn analyze_codex_entries(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(&api_key, &final_prompt).await?;
+    let raw_response = provider.call_api(&api_key, &final_prompt, 1_950).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -329,7 +329,7 @@ async fn execute_direct_step(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 1_950).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -355,7 +355,7 @@ async fn execute_summarize_step(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 1_950).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
