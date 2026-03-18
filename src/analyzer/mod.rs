@@ -30,6 +30,48 @@ use planner::{ExecutionPlan, StepStrategy};
 /// 호출 시 .await를 붙여야 실제로 실행됩니다 (Rust Async Book 참조).
 ///
 /// provider::load_provider()로 프로바이더와 API 키를 읽고,
+/// 애니메이션 스피너를 시작합니다. 반환된 JoinHandle을 abort()하면 스피너가 멈춥니다.
+/// eprint!("\r...")로 같은 줄을 덮어쓰는 방식이라 줄이 밀리지 않습니다.
+///
+/// Arc<AtomicBool>: 스레드 간 공유 가능한 bool. Ordering::Relaxed는 가장 가벼운 동기화입니다.
+/// tokio::spawn: 비동기 태스크를 백그라운드에서 실행합니다.
+fn start_spinner(msg: String) -> tokio::task::JoinHandle<()> {
+    use std::io::Write;
+    tokio::spawn(async move {
+        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let mut i = 0;
+        loop {
+            eprint!("\r{} {}", frames[i % frames.len()], msg);
+            let _ = std::io::stderr().flush();
+            i += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
+        }
+    })
+}
+
+/// 스피너를 멈추고 해당 줄을 지웁니다.
+fn stop_spinner(handle: tokio::task::JoinHandle<()>) {
+    handle.abort();
+    eprint!("\r\x1b[2K");
+}
+
+/// 카운트다운 대기: 1초마다 남은 시간을 갱신하여 표시합니다.
+async fn countdown_sleep(total_secs: u64) {
+    use std::io::Write;
+    let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+    let mut i = 0;
+    for remaining in (1..=total_secs).rev() {
+        // 1초를 80ms 단위로 나눠서 스피너 애니메이션을 계속 돌립니다.
+        for _ in 0..12 {
+            eprint!("\r{} 다음 요청까지 대기 중... ({remaining}초)", frames[i % frames.len()]);
+            let _ = std::io::stderr().flush();
+            i += 1;
+            tokio::time::sleep(std::time::Duration::from_millis(83)).await;
+        }
+    }
+    eprint!("\r\x1b[2K");
+}
+
 /// provider.call_api()로 선택된 프로바이더의 API를 호출합니다.
 /// 이 함수 자체는 어떤 프로바이더가 사용되는지 알 필요가 없습니다.
 pub async fn analyze_entries(
@@ -39,19 +81,19 @@ pub async fn analyze_entries(
     let (provider, api_key) = provider::load_provider()?;
 
     // 1. Probe: 사용자의 실제 rate limit 확인
-    // eprint!(개행 없음)로 출력 후, 결과를 \r로 같은 줄에 덮어씁니다.
-    eprint!("⠋ API 한도 확인 중...");
+    let sp = start_spinner("API 한도 확인 중...".into());
     let (limits, probed) = provider.probe_rate_limits(&api_key).await;
+    stop_spinner(sp);
     if probed {
         eprintln!(
-            "\r✓ ITPM: {} | OTPM: {} | RPM: {}",
+            "✓ ITPM: {} | OTPM: {} | RPM: {}",
             limits.input_tokens_per_minute,
             limits.output_tokens_per_minute,
             limits.requests_per_minute,
         );
     } else {
         eprintln!(
-            "\r⚠ rate limit 확인 실패, 기본값으로 진행합니다. (ITPM: {} | OTPM: {} | RPM: {})",
+            "⚠ rate limit 확인 실패, 기본값으로 진행합니다. (ITPM: {} | OTPM: {} | RPM: {})",
             limits.input_tokens_per_minute,
             limits.output_tokens_per_minute,
             limits.requests_per_minute,
@@ -90,8 +132,9 @@ pub async fn analyze_entries(
         }
     }
 
-    // 5. Execute
+    // 5. Execute — 모든 eprintln 출력이 끝난 후 스피너를 시작합니다.
     if plan.is_single_shot {
+        let sp = start_spinner("인사이트 분석 중...".into());
         let prompt_text = prompt::build_prompt(entries)?;
         let (final_prompt, redact_result) = if redactor_enabled {
             crate::redactor::redact_text(&prompt_text)
@@ -99,6 +142,7 @@ pub async fn analyze_entries(
             (prompt_text, RedactResult::empty())
         };
         let raw_response = provider.call_api(&api_key, &final_prompt).await?;
+        stop_spinner(sp);
         let result = insight::parse_response(&raw_response)?;
         Ok((result, redact_result))
     } else {
@@ -160,12 +204,9 @@ async fn execute_plan(
     let total_steps = plan.steps.len();
 
     for (i, step) in plan.steps.iter().enumerate() {
-        eprintln!(
-            "⠋ [{}/{}] {} 분석 중...",
-            i + 1,
-            total_steps,
-            step.session_id
-        );
+        let sp = start_spinner(format!(
+            "[{}/{}] {} 분석 중...", i + 1, total_steps, step.session_id
+        ));
 
         let session_entries: Vec<LogEntry> = entries
             .iter()
@@ -195,22 +236,21 @@ async fn execute_plan(
 
         match result {
             Ok((analysis, redact)) => {
+                stop_spinner(sp);
                 eprintln!("✓ [{}/{}] 완료", i + 1, total_steps);
                 results.push(analysis);
                 total_redact.merge(redact);
             }
             Err(e) => {
+                stop_spinner(sp);
                 let err_msg = e.to_string();
                 if err_msg.contains("429") {
-                    eprintln!(
-                        "⚠ [{}/{}] rate limit 초과, 60초 대기 후 재시도...",
-                        i + 1,
-                        total_steps
-                    );
-                    tokio::time::sleep(
-                        std::time::Duration::from_secs(60),
-                    )
-                    .await;
+                    // 429 rate limit: 60초 카운트다운 후 재시도
+                    countdown_sleep(60).await;
+
+                    let retry_sp = start_spinner(format!(
+                        "[{}/{}] {} 재시도 중...", i + 1, total_steps, step.session_id
+                    ));
 
                     let retry = match &step.strategy {
                         StepStrategy::Direct => {
@@ -237,43 +277,34 @@ async fn execute_plan(
 
                     match retry {
                         Ok((analysis, redact)) => {
-                            eprintln!(
-                                "✓ [{}/{}] 재시도 성공",
-                                i + 1,
-                                total_steps
-                            );
+                            stop_spinner(retry_sp);
+                            eprintln!("✓ [{}/{}] 재시도 성공", i + 1, total_steps);
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
+                            stop_spinner(retry_sp);
                             eprintln!(
                                 "⚠ [{}/{}] {} 스킵 (재시도 실패): {}",
-                                i + 1,
-                                total_steps,
-                                step.session_id,
-                                retry_err
+                                i + 1, total_steps, step.session_id, retry_err
                             );
                         }
                     }
                 } else {
                     eprintln!(
                         "⚠ [{}/{}] {} 스킵: {}",
-                        i + 1,
-                        total_steps,
-                        step.session_id,
-                        err_msg
+                        i + 1, total_steps, step.session_id, err_msg
                     );
                 }
             }
         }
 
-        // rate pacing: 마지막 스텝이 아니면 대기
+        // rate pacing: 마지막 스텝이 아니면 카운트다운 대기
         if i + 1 < total_steps {
             let wait =
                 summarizer::calculate_wait(step.estimated_tokens, &plan.rate_limits);
             if wait > 0.0 {
-                eprintln!("⠋ 다음 요청까지 대기 중... ({:.0}초)", wait);
-                tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
+                countdown_sleep(wait.ceil() as u64).await;
             }
         }
     }

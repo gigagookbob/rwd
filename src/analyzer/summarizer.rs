@@ -78,7 +78,7 @@ pub async fn summarize_chunks(
             .collect::<Vec<_>>()
             .join("\n");
 
-        eprintln!("    청크 {}/{total} 요약 중...", i + 1);
+        let sp = super::start_spinner(format!("청크 {}/{total} 요약 중...", i + 1));
 
         // 요약 API 호출 (max_tokens: 2000)
         let summary = provider
@@ -89,15 +89,16 @@ pub async fn summarize_chunks(
                 2000,
             )
             .await?;
+        super::stop_spinner(sp);
+        eprintln!("    ✓ 청크 {}/{total} 완료", i + 1);
         summaries.push(summary);
 
-        // rate pacing: 마지막 청크가 아니면 대기
+        // rate pacing: 마지막 청크가 아니면 카운트다운 대기
         if i + 1 < total {
             let chunk_tokens = estimate_tokens(&chunk_text);
             let wait = calculate_wait(chunk_tokens, limits);
             if wait > 0.0 {
-                eprintln!("    다음 요청까지 대기 중... ({:.0}초)", wait);
-                tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
+                super::countdown_sleep(wait.ceil() as u64).await;
             }
         }
     }
