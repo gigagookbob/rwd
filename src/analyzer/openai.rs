@@ -7,6 +7,7 @@
 // - 응답: choices[0].message.content (Anthropic은 content[0].text)
 
 use serde::{Deserialize, Serialize};
+use super::planner::RateLimits;
 
 // OpenAI Chat Completions 엔드포인트
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
@@ -112,6 +113,53 @@ pub async fn call_openai_api(
         .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
 
     Ok(text.message.content.clone())
+}
+
+/// OpenAI API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
+pub async fn probe_openai_rate_limits(api_key: &str) -> Option<RateLimits> {
+    let client = reqwest::Client::new();
+
+    let request_body = ChatRequest {
+        model: MODEL.to_string(),
+        messages: vec![ChatMessage {
+            role: "user".to_string(),
+            content: "ping".to_string(),
+        }],
+        max_tokens: 1,
+    };
+
+    let response = client
+        .post(API_URL)
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("Content-Type", "application/json")
+        .json(&request_body)
+        .send()
+        .await
+        .ok()?;
+
+    parse_openai_rate_headers(&response)
+}
+
+/// OpenAI 응답 헤더에서 rate limit 값을 추출한다.
+fn parse_openai_rate_headers(response: &reqwest::Response) -> Option<RateLimits> {
+    let headers = response.headers();
+
+    let tpm = headers
+        .get("x-ratelimit-limit-tokens")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())?;
+
+    let rpm = headers
+        .get("x-ratelimit-limit-requests")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(50);
+
+    Some(RateLimits {
+        input_tokens_per_minute: tpm,
+        output_tokens_per_minute: tpm / 4,
+        requests_per_minute: rpm,
+    })
 }
 
 #[cfg(test)]

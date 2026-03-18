@@ -125,6 +125,26 @@ impl LlmProvider {
             LlmProvider::OpenAi => "OpenAI",
         }
     }
+
+    /// API probe 호출로 사용자의 실제 rate limit을 확인한다.
+    /// 실패 시 default_generous()를 반환하여 single_shot으로 진행한다.
+    pub async fn probe_rate_limits(
+        &self,
+        api_key: &str,
+    ) -> super::planner::RateLimits {
+        let result = match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::probe_anthropic_rate_limits(api_key).await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::probe_openai_rate_limits(api_key).await
+            }
+        };
+        result.unwrap_or_else(|| {
+            eprintln!("⚠ rate limit 확인 실패, 기본값으로 진행합니다.");
+            super::planner::RateLimits::default_generous()
+        })
+    }
 }
 
 /// 설정 파일(~/.config/rwd/config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
