@@ -77,6 +77,7 @@ async fn countdown_sleep(total_secs: u64) {
 pub async fn analyze_entries(
     entries: &[LogEntry],
     redactor_enabled: bool,
+    verbose: bool,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
 
@@ -114,21 +115,23 @@ pub async fn analyze_entries(
         );
     } else {
         eprintln!(
-            "✓ 세션 {}개 분석 예정 (총 {} 토큰 추정)",
+            "✓ 세션 {}개를 순차 분석합니다 (총 {} 토큰 추정)",
             plan.steps.len(),
             plan.total_estimated_tokens
         );
-        for step in &plan.steps {
-            let strategy_desc = match &step.strategy {
-                StepStrategy::Direct => "직접 분석".to_string(),
-                StepStrategy::Summarize { chunks } => {
-                    format!("요약 후 분석 ({chunks} 청크)")
-                }
-            };
-            eprintln!(
-                "  • {}: {} 토큰 → {}",
-                step.session_id, step.estimated_tokens, strategy_desc
-            );
+        if verbose {
+            for step in &plan.steps {
+                let strategy_desc = match &step.strategy {
+                    StepStrategy::Direct => "직접 분석".to_string(),
+                    StepStrategy::Summarize { chunks } => {
+                        format!("요약 후 분석 ({chunks} 청크)")
+                    }
+                };
+                eprintln!(
+                    "  • {}: {} 토큰 → {}",
+                    step.session_id, step.estimated_tokens, strategy_desc
+                );
+            }
         }
     }
 

@@ -43,10 +43,8 @@ async fn main() {
     // match는 enum의 모든 가능한 값을 처리하는 표현식입니다 (Rust Book Ch.6 참조).
     // Rust 컴파일러는 모든 변형(variant)을 처리했는지 검사합니다 — 빠뜨리면 컴파일 에러가 납니다.
     match args.command {
-        Commands::Today => {
-            // run_today()가 async이므로 .await로 완료를 기다립니다.
-            // .await는 "이 비동기 작업이 끝날 때까지 기다려라"는 의미입니다.
-            if let Err(e) = run_today().await {
+        Commands::Today { verbose } => {
+            if let Err(e) = run_today(verbose).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -88,7 +86,7 @@ async fn main() {
 /// async fn은 비동기 함수를 선언합니다 — 내부에서 .await를 사용할 수 있습니다.
 /// 비동기 함수는 호출 시 즉시 실행되지 않고, .await를 만나야 실행됩니다.
 /// 여기서는 analyzer::analyze_entries() 호출이 네트워크 I/O를 수행하므로 async가 필요합니다.
-async fn run_today() -> Result<(), parser::ParseError> {
+async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
     let loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
@@ -164,7 +162,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
 
     // Claude 분석 — 내부에서 rate limit 확인 + plan 표시 + 스피너 관리
     if !claude_entries.is_empty() {
-        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled).await?;
+        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose).await?;
         total_redact.merge(redact_result);
         sources.push(("Claude Code".to_string(), result));
     }
@@ -221,7 +219,7 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
         Some(c) => c,
         None => {
             println!("캐시가 없습니다. today 분석을 먼저 실행합니다...");
-            run_today().await?;
+            run_today(false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
