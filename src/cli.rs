@@ -21,12 +21,12 @@ pub enum Commands {
     Today,
     /// 초기 설정을 수행합니다 (API 키, 출력 경로)
     Init,
-    /// 설정 값을 변경합니다
+    /// 설정 값을 변경합니다 (인자 없이 실행하면 대화형 메뉴)
     Config {
         /// 설정 키 (output-path, provider, api-key)
-        key: String,
+        key: Option<String>,
         /// 설정할 값
-        value: String,
+        value: Option<String>,
     },
     /// 최신 버전으로 업데이트합니다
     Update,

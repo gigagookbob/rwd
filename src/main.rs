@@ -58,7 +58,12 @@ async fn main() {
             }
         }
         Commands::Config { key, value } => {
-            if let Err(e) = config::run_config(&key, &value) {
+            let result = match (key, value) {
+                (Some(k), Some(v)) => config::run_config(&k, &v),
+                (None, None) => config::run_config_interactive().await,
+                _ => Err("사용법: `rwd config` (대화형) 또는 `rwd config <key> <value>`".into()),
+            };
+            if let Err(e) = result {
                 eprintln!("설정 변경 실패: {e}");
                 std::process::exit(1);
             }
