@@ -303,6 +303,47 @@ async fn execute_plan(
                             );
                         }
                     }
+                } else if err_msg.contains("JSON 파싱 실패") {
+                    // JSON 파싱 실패: LLM 응답이 비결정적이므로 대기 없이 1회 재시도
+                    let retry_sp = if use_spinner {
+                        Some(start_spinner(format!(
+                            "[{}/{}] {} 재분석 중...", i + 1, total_steps, step.session_id
+                        )))
+                    } else {
+                        None
+                    };
+
+                    let retry = match &step.strategy {
+                        StepStrategy::Direct => {
+                            execute_direct_step(
+                                &session_entries, provider, api_key, redactor_enabled,
+                            )
+                            .await
+                        }
+                        StepStrategy::Summarize { .. } => {
+                            execute_summarize_step(
+                                &session_entries, &step.session_id,
+                                provider, api_key, &plan.rate_limits, redactor_enabled,
+                            )
+                            .await
+                        }
+                    };
+
+                    match retry {
+                        Ok((analysis, redact)) => {
+                            if let Some(h) = retry_sp { stop_spinner(h); }
+                            eprintln!("✓ [{}/{}] 재분석 성공", i + 1, total_steps);
+                            results.push(analysis);
+                            total_redact.merge(redact);
+                        }
+                        Err(retry_err) => {
+                            if let Some(h) = retry_sp { stop_spinner(h); }
+                            eprintln!(
+                                "⚠ [{}/{}] {} 스킵 (재분석 실패): {}",
+                                i + 1, total_steps, step.session_id, retry_err
+                            );
+                        }
+                    }
                 } else {
                     eprintln!(
                         "⚠ [{}/{}] {} 스킵: {}",
