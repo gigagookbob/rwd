@@ -5,6 +5,43 @@
 
 use serde::{Deserialize, Serialize};
 
+/// LLM이 String 대신 Object를 반환할 때 방어적으로 처리하는 커스텀 디시리얼라이저.
+///
+/// serde_json::Value는 JSON의 모든 타입(String, Number, Object, Array, Null 등)을
+/// 하나의 enum으로 표현합니다. "일단 어떤 타입이든 받아들이고,
+/// String이 아니면 JSON 문자열로 변환"하는 방어 로직입니다.
+///
+/// 제네릭 라이프타임 `'de`는 serde가 역직렬화 시 빌려오는 데이터의 수명을 나타냅니다.
+/// D: Deserializer<'de>는 "어떤 포맷(JSON, TOML 등)의 디시리얼라이저든 받겠다"는 뜻입니다.
+fn string_or_stringify<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let v = serde_json::Value::deserialize(deserializer)?;
+    match v {
+        serde_json::Value::String(s) => Ok(s),
+        serde_json::Value::Null => Ok(String::new()),
+        other => Ok(other.to_string()),
+    }
+}
+
+/// Vec<String> 필드용 방어적 디시리얼라이저.
+/// 배열의 각 원소가 String이 아닌 Object일 때도 JSON 문자열로 변환합니다.
+fn vec_string_or_stringify<'de, D>(deserializer: D) -> Result<Vec<String>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let values: Vec<serde_json::Value> = Vec::deserialize(deserializer)?;
+    Ok(values
+        .into_iter()
+        .map(|v| match v {
+            serde_json::Value::String(s) => s,
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        })
+        .collect())
+}
+
 /// LLM이 추출한 인사이트의 전체 응답을 담는 구조체.
 /// Debug는 디버그 출력용, Deserialize는 JSON → 구조체 변환용, Serialize는 구조체 → JSON 변환용.
 /// Clone은 캐시 저장 시 소유권 이동 없이 복제하기 위해 필요합니다 (Rust Book Ch.4 참조).
@@ -18,10 +55,12 @@ pub struct AnalysisResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SessionInsight {
     pub session_id: String,
+    #[serde(deserialize_with = "string_or_stringify")]
     pub work_summary: String,
     /// 사용자의 선택 분기 — 어떤 결정을 왜 내렸는가
     pub decisions: Vec<Decision>,
     /// 사용자가 궁금했거나 헷갈렸던 것
+    #[serde(deserialize_with = "vec_string_or_stringify")]
     pub curiosities: Vec<String>,
     /// 모델이 틀리거나 몰라서 사용자가 수정한 것
     pub corrections: Vec<Correction>,
@@ -35,28 +74,28 @@ pub struct SessionInsight {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TilItem {
     /// 배운 것을 한 줄로
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub title: String,
     /// 왜 이게 필요했고 어떻게 적용했는지 1-2줄
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub detail: String,
 }
 
 /// 사용자의 선택 분기 (A vs B 중 왜 A를 선택했는가)
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Decision {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub what: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub why: String,
 }
 
 /// 모델이 틀려서 사용자가 수정한 것
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Correction {
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub model_said: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "string_or_stringify")]
     pub user_corrected: String,
 }
 
@@ -225,5 +264,31 @@ mod tests {
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].corrections[0].model_said, "잘못된 설명");
         assert_eq!(result.sessions[0].corrections[0].user_corrected, "");
+    }
+
+    // --- LLM 응답 타입 이탈 내성 테스트 (map → string 방어) ---
+
+    #[test]
+    fn test_curiosities_객체_배열이면_stringify() {
+        // 에러 원인: LLM이 curiosities를 문자열 대신 객체 배열로 반환
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[{"question":"Xcode 호환성","context":"빌드 실패"}],"corrections":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert_eq!(result.sessions[0].curiosities.len(), 1);
+        assert!(result.sessions[0].curiosities[0].contains("Xcode 호환성"));
+    }
+
+    #[test]
+    fn test_work_summary_객체이면_stringify() {
+        // LLM이 work_summary를 객체로 반환하는 경우
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":{"main":"요약","detail":"상세"},"decisions":[],"curiosities":[],"corrections":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert!(result.sessions[0].work_summary.contains("요약"));
+    }
+
+    #[test]
+    fn test_decision_why_객체이면_stringify() {
+        let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[{"what":"선택","why":{"reason":"이유","context":"맥락"}}],"curiosities":[],"corrections":[]}]}"#;
+        let result = parse_response(json).unwrap();
+        assert!(result.sessions[0].decisions[0].why.contains("이유"));
     }
 }
