@@ -31,8 +31,8 @@ async fn main() {
     }
 
     match args.command {
-        Commands::Today { verbose } => {
-            if let Err(e) = run_today(verbose).await {
+        Commands::Today { verbose, lang } => {
+            if let Err(e) = run_today(verbose, lang).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -60,14 +60,14 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Summary => {
-            if let Err(e) = run_summary().await {
+        Commands::Summary { lang } => {
+            if let Err(e) = run_summary(lang).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
-        Commands::Slack => {
-            if let Err(e) = run_slack().await {
+        Commands::Slack { lang } => {
+            if let Err(e) = run_slack(lang).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -75,8 +75,46 @@ async fn main() {
     }
 }
 
+/// Resolves the language from: --lang flag > config > migration prompt.
+fn resolve_lang(
+    flag: &Option<String>,
+    loaded_config: &mut Option<config::Config>,
+) -> Result<config::Lang, Box<dyn std::error::Error>> {
+    // 1. --lang flag takes priority
+    if let Some(lang_str) = flag {
+        return match lang_str.as_str() {
+            "ko" => Ok(config::Lang::Ko),
+            "en" => Ok(config::Lang::En),
+            _ => Err(crate::messages::lang::unsupported(lang_str).into()),
+        };
+    }
+    // 2. Config value
+    if let Some(cfg) = loaded_config.as_ref() {
+        if let Some(lang) = &cfg.lang {
+            return Ok(lang.clone());
+        }
+    }
+    // 3. Migration prompt — ask user and save to config
+    eprint!("{}", crate::messages::lang::NOT_CONFIGURED);
+    let mut input = String::new();
+    std::io::stdin().read_line(&mut input)?;
+    let lang = match input.trim() {
+        "ko" => config::Lang::Ko,
+        _ => config::Lang::En,
+    };
+    // Save to config if available
+    if let Some(cfg) = loaded_config.as_mut() {
+        cfg.lang = Some(lang.clone());
+        if let Ok(config_file) = config::config_path() {
+            let _ = config::save_config(cfg, &config_file);
+        }
+        eprintln!("{}", crate::messages::lang::saved(&lang.to_string()));
+    }
+    Ok(lang)
+}
+
 /// Parses today's session logs, runs LLM analysis, and prints insights.
-async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
+async fn run_today(verbose: bool, _lang_flag: Option<String>) -> Result<(), parser::ParseError> {
     let loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("{}", crate::messages::error::NO_CONFIG);
@@ -199,14 +237,14 @@ async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
 /// 1. Loads today's cache (runs `run_today()` first if missing).
 /// 2. Collects work_summary from all sessions and sends to LLM.
 /// 3. Prints summary to terminal, appends to daily Markdown, copies to clipboard.
-async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_summary(_lang_flag: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let today = chrono::Local::now().date_naive();
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false).await?;
+            run_today(false, None).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -252,14 +290,14 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
 ///
 /// Similar to `run_summary()` but uses SLACK_PROMPT for Slack-friendly formatting.
 /// Only outputs to terminal and copies to clipboard (no Obsidian save).
-async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_slack(_lang_flag: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let today = chrono::Local::now().date_naive();
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false).await?;
+            run_today(false, None).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {

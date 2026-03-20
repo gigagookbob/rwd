@@ -7,6 +7,23 @@ use std::path::PathBuf;
 
 pub type ConfigError = Box<dyn std::error::Error>;
 
+/// Supported languages for LLM output.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lang {
+    En,
+    Ko,
+}
+
+impl std::fmt::Display for Lang {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Lang::En => write!(f, "en"),
+            Lang::Ko => write!(f, "ko"),
+        }
+    }
+}
+
 /// Top-level config file structure.
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
@@ -14,6 +31,8 @@ pub struct Config {
     pub output: OutputConfig,
     /// Sensitive data masking config. None means default-enabled.
     pub redactor: Option<RedactorConfig>,
+    /// LLM output language. None triggers migration prompt on first use.
+    pub lang: Option<Lang>,
 }
 
 impl Config {
@@ -136,6 +155,15 @@ pub fn run_init() -> Result<(), ConfigError> {
     };
     eprintln!("{}", crate::messages::init::output_path_set(&output_path.display()));
 
+    // Language selection
+    eprint!("{}", crate::messages::lang::SELECT);
+    let mut lang_input = String::new();
+    std::io::stdin().read_line(&mut lang_input)?;
+    let lang = match lang_input.trim() {
+        "ko" => Lang::Ko,
+        _ => Lang::En,
+    };
+
     let config = Config {
         llm: LlmConfig {
             provider: provider.to_string(),
@@ -145,6 +173,7 @@ pub fn run_init() -> Result<(), ConfigError> {
             path: output_path.to_string_lossy().to_string(),
         },
         redactor: None,
+        lang: Some(lang),
     };
 
     save_config(&config, &config_file)?;
@@ -177,6 +206,15 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
         "api-key" => {
             config.llm.api_key = value.to_string();
             eprintln!("{}", crate::messages::config::api_key_changed(&mask_api_key(value)));
+        }
+        "lang" => {
+            let lang = match value {
+                "ko" => Lang::Ko,
+                "en" => Lang::En,
+                _ => return Err(crate::messages::lang::unsupported(value).into()),
+            };
+            config.lang = Some(lang);
+            eprintln!("Language changed: {value}");
         }
         _ => {
             return Err(crate::messages::config::unknown_key(key).into());
@@ -306,6 +344,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             format!("{cyan}api-key{reset}       {dim}[{}]{reset}", mask_api_key(&config.llm.api_key)),
             format!("{cyan}output-path{reset}   {dim}[{}]{reset}", config.output.path),
             format!("{cyan}redactor{reset}      {dim}[{}]{reset}", redactor_status),
+            format!("{cyan}lang{reset}          {dim}[{}]{reset}", config.lang.as_ref().map_or("not set", |l| match l { Lang::En => "en", Lang::Ko => "ko" })),
             format!("{dim}{}{reset}", crate::messages::config::EXIT),
         ];
 
@@ -418,8 +457,35 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                     eprintln!("{green}{}{reset}\n", crate::messages::config::changed(old_label, new_label));
                 }
             }
-            // exit
+            // lang
             4 => {
+                let langs = ["en", "ko"];
+                let current_idx = config.lang.as_ref().map_or(0, |l| match l {
+                    Lang::En => 0,
+                    Lang::Ko => 1,
+                });
+
+                let Some(chosen) = Select::with_theme(&theme)
+                    .with_prompt(crate::messages::config::LANGUAGE)
+                    .items(&langs)
+                    .default(current_idx)
+                    .interact_opt()?
+                else {
+                    continue;
+                };
+
+                let new_lang = if chosen == 0 { Lang::En } else { Lang::Ko };
+                let old_label = config.lang.as_ref().map_or("not set".to_string(), |l| l.to_string());
+                if config.lang.as_ref() == Some(&new_lang) {
+                    eprintln!("{dim}{}{reset}\n", crate::messages::config::NO_CHANGE);
+                } else {
+                    config.lang = Some(new_lang.clone());
+                    save_config(&config, &config_file)?;
+                    eprintln!("{green}{}{reset}\n", crate::messages::config::changed(&old_label, &new_lang.to_string()));
+                }
+            }
+            // exit
+            5 => {
                 console::Term::stderr().clear_last_lines(1)?;
                 break;
             }
@@ -513,6 +579,7 @@ mod tests {
                 path: "/tmp/vault".to_string(),
             },
             redactor: None,
+            lang: Some(Lang::En),
         };
 
         save_config(&config, &path).expect("save");
@@ -521,6 +588,7 @@ mod tests {
         assert_eq!(loaded.llm.provider, "anthropic");
         assert_eq!(loaded.llm.api_key, "sk-test-key");
         assert_eq!(loaded.output.path, "/tmp/vault");
+        assert_eq!(loaded.lang, Some(Lang::En));
 
         std::fs::remove_dir_all(&temp_dir).ok();
     }
@@ -581,5 +649,77 @@ enabled = false
 "#;
         let config: Config = toml::from_str(toml_str).expect("parse");
         assert_eq!(config.redactor.unwrap().enabled, false);
+    }
+
+    #[test]
+    fn test_config_lang_none_when_missing() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        assert!(config.lang.is_none());
+    }
+
+    #[test]
+    fn test_config_lang_parses_ko() {
+        // lang must appear before table sections in TOML
+        let toml_str = r#"
+lang = "ko"
+
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        assert_eq!(config.lang, Some(Lang::Ko));
+    }
+
+    #[test]
+    fn test_config_lang_parses_en() {
+        let toml_str = r#"
+lang = "en"
+
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        assert_eq!(config.lang, Some(Lang::En));
+    }
+
+    #[test]
+    fn test_lang_display() {
+        assert_eq!(Lang::En.to_string(), "en");
+        assert_eq!(Lang::Ko.to_string(), "ko");
+    }
+
+    #[test]
+    fn test_lang_roundtrip_serialization() {
+        let config = Config {
+            llm: LlmConfig {
+                provider: "anthropic".to_string(),
+                api_key: "sk-test".to_string(),
+            },
+            output: OutputConfig {
+                path: "/tmp/vault".to_string(),
+            },
+            redactor: None,
+            lang: Some(Lang::Ko),
+        };
+        let serialized = toml::to_string_pretty(&config).expect("serialize");
+        assert!(serialized.contains("lang = \"ko\""));
+        let loaded: Config = toml::from_str(&serialized).expect("deserialize");
+        assert_eq!(loaded.lang, Some(Lang::Ko));
     }
 }
