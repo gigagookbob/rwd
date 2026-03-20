@@ -6,14 +6,17 @@
 use super::planner::RateLimits;
 use super::prompt::estimate_tokens;
 
-/// Prompt for chunk summarization.
-/// Instructs the LLM to preserve key content aligned with rwd's insight categories.
-pub const CHUNK_SUMMARIZE_PROMPT: &str = r#"다음 개발 세션 대화에서 아래 항목을 중심으로 요약하라:
-- 내린 기술적 결정과 그 이유
-- 실수나 수정 사항
-- 새로 배운 점 (TIL)
-- 흥미로운 발견이나 의문점
-원문의 구체적 기술 용어와 맥락을 보존하라."#;
+use crate::config::Lang;
+
+const CHUNK_SUMMARIZE_PROMPT_EN: &str = include_str!("../../prompts/chunk_summarize_en.md");
+const CHUNK_SUMMARIZE_PROMPT_KO: &str = include_str!("../../prompts/chunk_summarize_ko.md");
+
+pub fn get_chunk_summarize_prompt(lang: &Lang) -> &'static str {
+    match lang {
+        Lang::En => CHUNK_SUMMARIZE_PROMPT_EN,
+        Lang::Ko => CHUNK_SUMMARIZE_PROMPT_KO,
+    }
+}
 
 /// Splits messages into chunks that fit within the ITPM limit.
 /// Splits only at message boundaries (never mid-message).
@@ -66,6 +69,7 @@ pub async fn summarize_chunks(
     provider: &super::provider::LlmProvider,
     api_key: &str,
     limits: &RateLimits,
+    lang: &Lang,
 ) -> Result<String, super::AnalyzerError> {
     let mut summaries: Vec<String> = Vec::new();
     let total = chunks.len();
@@ -82,7 +86,7 @@ pub async fn summarize_chunks(
         let summary = provider
             .call_api_with_max_tokens(
                 api_key,
-                CHUNK_SUMMARIZE_PROMPT,
+                get_chunk_summarize_prompt(lang),
                 &chunk_text,
                 2000,
             )

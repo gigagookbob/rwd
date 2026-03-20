@@ -114,13 +114,15 @@ fn resolve_lang(
 }
 
 /// Parses today's session logs, runs LLM analysis, and prints insights.
-async fn run_today(verbose: bool, _lang_flag: Option<String>) -> Result<(), parser::ParseError> {
-    let loaded_config = config::load_config_if_exists();
+async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parser::ParseError> {
+    let mut loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("{}", crate::messages::error::NO_CONFIG);
         std::process::exit(1);
     }
     let redactor_enabled = loaded_config.as_ref().unwrap().is_redactor_enabled();
+    let lang = resolve_lang(&lang_flag, &mut loaded_config)
+        .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
     // Use local timezone (e.g. KST) to determine "today".
     let today = chrono::Local::now().date_naive();
@@ -188,14 +190,14 @@ async fn run_today(verbose: bool, _lang_flag: Option<String>) -> Result<(), pars
 
     // Claude analysis
     if !claude_entries.is_empty() {
-        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose).await?;
+        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose, &lang).await?;
         total_redact.merge(redact_result);
         sources.push(("Claude Code".to_string(), result));
     }
 
     // Codex analysis — runs after Claude spinner finishes; fast enough to skip a spinner.
     for (summary, entries) in &codex_sessions {
-        let (result, redact_result) = analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled).await?;
+        let (result, redact_result) = analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled, &lang).await?;
         total_redact.merge(redact_result);
         sources.push(("Codex".to_string(), result));
     }
@@ -272,7 +274,10 @@ async fn run_summary(_lang_flag: Option<String>) -> Result<(), Box<dyn std::erro
     }
 
     println!("{}", crate::messages::status::SUMMARY_GENERATING);
-    let summary = analyzer::analyze_summary(&summaries_text).await?;
+    let mut loaded_config = config::load_config_if_exists();
+    let lang = resolve_lang(&_lang_flag, &mut loaded_config)
+        .unwrap_or(config::Lang::En);
+    let summary = analyzer::analyze_summary(&summaries_text, &lang).await?;
 
     println!("\n{}", crate::messages::status::SUMMARY_HEADER);
     println!("{summary}");
@@ -336,7 +341,10 @@ async fn run_slack(_lang_flag: Option<String>) -> Result<(), Box<dyn std::error:
     }
 
     println!("{}", crate::messages::status::SLACK_GENERATING);
-    let slack_message = analyzer::analyze_slack(&summaries_text).await?;
+    let mut loaded_config = config::load_config_if_exists();
+    let lang = resolve_lang(&_lang_flag, &mut loaded_config)
+        .unwrap_or(config::Lang::En);
+    let slack_message = analyzer::analyze_slack(&summaries_text, &lang).await?;
 
     println!("\n{slack_message}");
 
