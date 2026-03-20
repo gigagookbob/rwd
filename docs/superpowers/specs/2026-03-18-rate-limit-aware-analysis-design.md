@@ -1,64 +1,64 @@
-# Design: Rate Limit 인식 분석 엔진
+# Design: Rate Limit Aware Analysis Engine
 
-## 배경
+## Background
 
-이전 설계(token-limit-fallback)는 "시도 → 실패 → fallback" 방식이었다. 그러나 실제 tier별 ITPM 차이가 극단적이다:
+The previous design (token-limit-fallback) used a "try → fail → fallback" approach. However, the actual ITPM differences between tiers are extreme:
 
-| Tier | Claude Sonnet ITPM | 비고 |
-|------|-------------------|------|
-| Tier 1 | 30,000 | 개인 사용자 대부분 |
-| Tier 4 | 2,000,000 | 67배 차이 |
+| Tier | Claude Sonnet ITPM | Note |
+|------|--------------------|------|
+| Tier 1 | 30,000 | Most individual users |
+| Tier 4 | 2,000,000 | 67x difference |
 
-Tier 1 사용자는 429 에러만 받고 사실상 rwd를 사용할 수 없었다. "에러 대신 동작"이 이번 설계의 핵심이다.
+Tier 1 users were effectively unable to use rwd, receiving only 429 errors. "Working instead of erroring" is the core principle of this design.
 
-## 이전 설계와의 관계
+## Relationship to Previous Design
 
-`2026-03-18-token-limit-fallback-design.md`의 try-fallback 방식을 **완전히 교체**한다. 기존의 400/429 에러 판별 로직, `analyze_entries_by_session()` fallback 함수를 제거하고, probe 기반 사전 계획 방식으로 대체한다.
+This **completely replaces** the try-fallback approach from `2026-03-18-token-limit-fallback-design.md`. The existing 400/429 error detection logic and `analyze_entries_by_session()` fallback function are removed and replaced with a probe-based proactive planning approach.
 
-## 스코프
+## Scope
 
-- **포함:** `analyze_entries()` (Claude Code 로그 분석) — 이 설계의 주요 대상
-- **제외:** `analyze_codex_entries()` — 이미 세션별 개별 분석 구조이므로 현재 스코프에서 제외. 향후 동일 파이프라인으로 통합 가능.
-- **제외:** `analyze_summary()` — 별도 API 호출이지만 토큰 사용량이 적음 (분석 결과 요약). 단, 실행 계획의 토큰 예산에 최소 5,000 토큰 여유분을 남겨둔다.
+- **Included:** `analyze_entries()` (Claude Code log analysis) — primary target of this design
+- **Excluded:** `analyze_codex_entries()` — already has a per-session analysis structure, so excluded from current scope. Can be unified into the same pipeline in the future.
+- **Excluded:** `analyze_summary()` — separate API call but with low token usage (summarizes analysis results). However, the execution plan reserves at least 5,000 tokens of headroom.
 
-## 설계 원칙
+## Design Principles
 
-- 모든 tier에서 동작해야 한다
-- 높은 tier 사용자에게 불필요한 오버헤드를 주지 않는다
-- 사용자에게 진행 상황을 투명하게 보여준다
+- Must work on all tiers
+- Must not impose unnecessary overhead on high-tier users
+- Must show progress transparently to the user
 
-## 아키텍처 개요
+## Architecture Overview
 
 ```
 analyze_entries(entries, redactor_enabled)
-  → probe_rate_limits(provider, api_key) → RateLimits (실패 시 default_generous)
+  → probe_rate_limits(provider, api_key) → RateLimits (default_generous on failure)
   → estimate_sessions(entries) → Vec<SessionEstimate>
   → build_execution_plan(rate_limits, estimates) → ExecutionPlan
   → display_plan(plan)
   → execute_plan(plan, provider, api_key, redactor_enabled)
-      → is_single_shot: 한 번에 전송 (기존과 동일)
-      → 아닐 경우: 스텝별 순차 실행
-          → Direct: 세션 프롬프트 → API 호출
-          → Summarize: 청크 분할 → 요약 → 합치기 → 분석
-          → 스텝 간 rate pacing
-  → merge_results → 최종 결과
+      → is_single_shot: send all at once (same as before)
+      → otherwise: sequential step execution
+          → Direct: session prompt → API call
+          → Summarize: chunk split → summarize → merge → analyze
+          → rate pacing between steps
+  → merge_results → final result
 ```
 
-## 섹션 1: Probe 모듈
+## Section 1: Probe Module
 
-### 목적
+### Purpose
 
-API 호출 전에 사용자의 실제 rate limit을 파악한다.
+Determine the user's actual rate limits before making API calls.
 
-### 동작
+### Behavior
 
-- 최소한의 메시지("ping")로 API 호출
-- 응답 헤더에서 rate limit 정보 추출:
+- Make an API call with a minimal message ("ping")
+- Extract rate limit info from response headers:
   - Claude: `anthropic-ratelimit-input-tokens-limit`
   - OpenAI: `x-ratelimit-limit-tokens`
-- 결과를 `RateLimits` 구조체로 반환
+- Return results as a `RateLimits` struct
 
-### 타입
+### Types
 
 ```rust
 pub struct RateLimits {
@@ -68,21 +68,21 @@ pub struct RateLimits {
 }
 ```
 
-### 비용
+### Cost
 
-입력 ~10토큰 + 출력 ~10토큰. Claude Sonnet 기준 $0.0001 이하.
+~10 input tokens + ~10 output tokens. Less than $0.0001 on Claude Sonnet.
 
-### Probe 실패 시
+### Probe Failure
 
-Probe가 실패할 수 있는 경우: 네트워크 오류, 401(잘못된 키), 5xx, 헤더 누락(프록시/커스텀 게이트웨이).
+Scenarios where probe can fail: network errors, 401 (invalid key), 5xx, missing headers (proxy/custom gateway).
 
-**복구 전략:** probe 실패 시 기본값으로 진행한다.
+**Recovery strategy:** proceed with defaults on probe failure.
 
 ```rust
 impl RateLimits {
-    /// probe 실패 시 사용하는 관대한 기본값.
-    /// 대부분의 사용자가 single_shot으로 진행하게 되며,
-    /// 실제 제한에 걸리면 런타임 안전망이 처리한다.
+    /// Generous defaults used when probe fails.
+    /// Most users will proceed with single_shot,
+    /// and the runtime safety net handles actual limits.
     pub fn default_generous() -> Self {
         Self {
             input_tokens_per_minute: 1_000_000,
@@ -93,25 +93,25 @@ impl RateLimits {
 }
 ```
 
-### 변경 범위
+### Scope of Changes
 
-- `analyzer/anthropic.rs`: `probe_rate_limits()` 함수 추가. 기존 `call_api`와 별도로 응답 헤더를 파싱하는 저수준 함수 필요.
-- `analyzer/openai.rs`: 동일 구조의 `probe_rate_limits()` 함수 추가.
-- `analyzer/provider.rs`: `LlmProvider`에 `probe_rate_limits()` 디스패치 메서드 추가.
+- `analyzer/anthropic.rs`: Add `probe_rate_limits()` function. Requires a low-level function to parse response headers, separate from existing `call_api`.
+- `analyzer/openai.rs`: Add `probe_rate_limits()` function with the same structure.
+- `analyzer/provider.rs`: Add `probe_rate_limits()` dispatch method to `LlmProvider`.
 
-## 섹션 2: 토큰 추정기
+## Section 2: Token Estimator
 
-### 목적
+### Purpose
 
-API 호출 없이 로컬에서 프롬프트 토큰 수를 사전 추정한다.
+Estimate prompt token counts locally without making API calls.
 
-### 방식
+### Method
 
-- 정확한 tokenizer 대신 글자 수 기반 간이 추정
-- 비율: `글자 수 ÷ 2` (한국어는 음절당 ~1토큰이므로, 한국어/영어 혼합에서 보수적 추정)
-- 시스템 프롬프트 토큰도 합산: `const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64` (`prompt.rs`에 정의, 고정 문자열이므로 미리 계산)
+- Use character count instead of a precise tokenizer
+- Ratio: `character count / 2` (Korean syllables are ~1 token each, so this is a conservative estimate for mixed Korean/English text)
+- Include system prompt tokens: `const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64` (defined in `prompt.rs`, pre-calculated since the string is fixed)
 
-### 타입
+### Types
 
 ```rust
 pub struct SessionEstimate {
@@ -121,33 +121,33 @@ pub struct SessionEstimate {
 }
 ```
 
-### 인터페이스
+### Interface
 
 ```rust
-/// 세션별 토큰 추정
+/// Per-session token estimation
 pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate>
 ```
 
-### 변경 범위
+### Scope of Changes
 
-- `analyzer/prompt.rs`: 추정 함수 추가. 기존 `build_prompt`과 `extract_session_ids`를 활용.
+- `analyzer/prompt.rs`: Add estimation function. Leverages existing `build_prompt` and `extract_session_ids`.
 
-## 섹션 3: 실행 계획 수립
+## Section 3: Execution Plan Building
 
-### 목적
+### Purpose
 
-ITPM과 세션별 추정 토큰을 비교해서 전체 실행 전략을 결정한다.
+Compare ITPM against per-session estimated tokens to determine the overall execution strategy.
 
-### 전략 분기
+### Strategy Branching
 
 ```
-세션 추정 토큰 vs ITPM
-  ├─ 전체 합계 ≤ ITPM → is_single_shot: true (한 번에 전송)
-  ├─ 개별 세션 ≤ ITPM → Direct 스텝 (세션별 순차 전송)
-  └─ 개별 세션 > ITPM → Summarize 스텝 (청크 분할 → 요약 → 분석)
+Session estimated tokens vs ITPM
+  ├─ Total sum ≤ ITPM → is_single_shot: true (send all at once)
+  ├─ Individual session ≤ ITPM → Direct step (sequential per-session)
+  └─ Individual session > ITPM → Summarize step (chunk split → summarize → analyze)
 ```
 
-### 타입
+### Types
 
 ```rust
 pub enum StepStrategy {
@@ -169,73 +169,73 @@ pub struct ExecutionPlan {
 }
 ```
 
-### 핵심 로직
+### Core Logic
 
-`is_single_shot`이면 기존처럼 한 번에 보냄. 높은 tier 사용자는 오버헤드 없음.
+If `is_single_shot`, send everything at once as before. No overhead for high-tier users.
 
-### 변경 범위
+### Scope of Changes
 
-- 새 모듈 `analyzer/planner.rs`
+- New module `analyzer/planner.rs`
 
-## 섹션 4: 요약 전략
+## Section 4: Summarization Strategy
 
-### 목적
+### Purpose
 
-ITPM을 초과하는 대형 세션을 요약해서 분석 가능한 크기로 축소한다.
+Reduce oversized sessions that exceed ITPM by summarizing them into analyzable sizes.
 
-### 흐름
-
-```
-대형 세션 (50K 토큰)
-  → ITPM(30K) 기준으로 청크 분할 (2개)
-  → 각 청크에 요약 프롬프트 적용
-  → 요약 결과 합치기
-  → 합쳐진 요약으로 최종 분석
-```
-
-### 요약 프롬프트
-
-rwd의 인사이트 카테고리에 맞춤 설계:
+### Flow
 
 ```
-"다음 개발 세션 대화에서 아래 항목을 중심으로 요약하라:
-- 내린 기술적 결정과 그 이유
-- 실수나 수정 사항
-- 새로 배운 점 (TIL)
-- 흥미로운 발견이나 의문점
-원문의 구체적 기술 용어와 맥락을 보존하라."
+Large session (50K tokens)
+  → Split into chunks based on ITPM (30K) → 2 chunks
+  → Apply summarization prompt to each chunk
+  → Merge summary results
+  → Final analysis on the merged summary
 ```
 
-### 청크 분할 단위
+### Summarization Prompt
 
-대화 메시지(turn) 경계에서 자른다. 메시지 중간에서 자르지 않는다.
+Custom-designed for rwd's insight categories:
 
-### 요약 출력 크기 제한
+```
+"Summarize the following development session conversation, focusing on:
+- Technical decisions made and their rationale
+- Mistakes or corrections
+- Newly learned concepts (TIL)
+- Interesting discoveries or questions
+Preserve specific technical terms and context from the original."
+```
 
-요약 프롬프트에 `max_tokens: 2000`을 설정하여 각 청크의 요약이 2000 토큰 이하가 되도록 한다. N개 청크의 요약을 합쳐도 `N × 2000` 토큰으로 제한되므로, 최종 분석 프롬프트가 ITPM을 초과할 가능성을 줄인다.
+### Chunk Splitting Unit
 
-### Rate pacing
+Split at conversation message (turn) boundaries. Never split in the middle of a message.
 
-청크 간 요약 호출 사이에 리필 대기. 대기 시간: `max(itpm_wait, rpm_wait)`
-- `itpm_wait`: `(사용한 토큰 / ITPM) × 60초`
-- `rpm_wait`: `60 / RPM` 초 (최소 요청 간격)
+### Summary Output Size Limit
 
-### 모델
+Set `max_tokens: 2000` on the summarization prompt so each chunk's summary stays under 2000 tokens. Even with N chunks merged, the total is limited to `N × 2000` tokens, reducing the chance of the final analysis prompt exceeding ITPM.
 
-요약과 분석 모두 사용자가 설정한 동일 모델을 사용한다. 경량 모델 옵션은 향후 성능 비교 후 고려.
+### Rate Pacing
 
-### 변경 범위
+Wait for token refill between chunk summarization calls. Wait time: `max(itpm_wait, rpm_wait)`
+- `itpm_wait`: `(tokens_used / ITPM) × 60 seconds`
+- `rpm_wait`: `60 / RPM` seconds (minimum request interval)
 
-- 새 모듈 `analyzer/summarizer.rs`: 청크 분할, 요약 호출, `CHUNK_SUMMARIZE_PROMPT` 상수 포함
-- 기존 `provider.rs`의 `SUMMARY_PROMPT`(진척 요약용)와 별개. 이름 충돌 방지를 위해 `CHUNK_SUMMARIZE_PROMPT`로 명명.
+### Model
 
-## 섹션 5: 실행 엔진 + UX 출력
+Both summarization and analysis use the same model configured by the user. A lightweight model option will be considered after future performance comparisons.
 
-### 목적
+### Scope of Changes
 
-ExecutionPlan을 받아 순차 실행하고 진행 상황을 실시간 표시한다.
+- New module `analyzer/summarizer.rs`: includes chunk splitting, summarization calls, and `CHUNK_SUMMARIZE_PROMPT` constant
+- Separate from existing `provider.rs`'s `SUMMARY_PROMPT` (for progress summaries). Named `CHUNK_SUMMARIZE_PROMPT` to avoid naming conflicts.
 
-### 인터페이스
+## Section 5: Execution Engine + UX Output
+
+### Purpose
+
+Receive an ExecutionPlan, execute steps sequentially, and display real-time progress.
+
+### Interface
 
 ```rust
 pub async fn execute_plan(
@@ -246,110 +246,110 @@ pub async fn execute_plan(
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError>
 ```
 
-### 실행 흐름
+### Execution Flow
 
-1. `is_single_shot` → 기존과 동일하게 한 번에 호출
-2. 아닐 경우 → 스텝별 순차 실행:
-   - `Direct`: 해당 세션 프롬프트 생성 → API 호출
-   - `Summarize`: 청크 분할 → 각 청크 요약 (대기 포함) → 합쳐서 분석
-3. 모든 스텝 결과를 `merge_results`로 병합
+1. `is_single_shot` → call once as before
+2. Otherwise → execute steps sequentially:
+   - `Direct`: build session prompt → API call
+   - `Summarize`: chunk split → summarize each chunk (with waits) → merge → analyze
+3. Merge all step results with `merge_results`
 
-### 토큰 예산 관리
+### Token Budget Management
 
-- 각 호출 후 사용한 토큰 차감
-- 잔여 예산 < 다음 호출 추정 토큰 → 리필 대기
-- 대기 시간: `max(itpm_wait, rpm_wait)` (섹션 4 Rate pacing 참조)
-- `analyze_summary()` 호출을 위해 마지막 스텝 후 여유분 확보
+- Deduct used tokens after each call
+- Remaining budget < next call's estimated tokens → wait for refill
+- Wait time: `max(itpm_wait, rpm_wait)` (see Section 4 Rate pacing)
+- Reserve headroom after the last step for the `analyze_summary()` call
 
-### 스텝 실패 처리
+### Step Failure Handling
 
-개별 스텝이 비-rate-limit 에러(네트워크 오류, 잘못된 응답 등)로 실패하면:
-- 해당 세션을 스킵하고 경고 출력
-- 나머지 스텝은 계속 진행 (부분 성공 허용)
-- rate limit 에러(429) 발생 시: 응답의 retry-after 헤더만큼 대기 후 재시도 (최대 1회). 재시도도 실패 시 해당 세션 스킵.
-  - Anthropic: `retry-after` 표준 헤더
-  - OpenAI: `retry-after` 또는 `x-ratelimit-reset-tokens` 헤더
+When an individual step fails with a non-rate-limit error (network error, invalid response, etc.):
+- Skip that session and print a warning
+- Continue with remaining steps (partial success allowed)
+- On rate limit error (429): wait for the retry-after header duration, then retry once. If retry also fails, skip that session.
+  - Anthropic: standard `retry-after` header
+  - OpenAI: `retry-after` or `x-ratelimit-reset-tokens` header
 
-### Redaction 적용 시점
+### Redaction Timing
 
-Summarize 흐름에서 redaction은 **각 청크의 API 호출 직전**에 적용한다. 청크 분할은 원본 텍스트 기준으로 수행하고, 분할된 청크를 redact한 뒤 API로 전송한다. 이렇게 하면 토큰 추정의 정확도가 유지된다.
+In the Summarize flow, redaction is applied **just before each chunk's API call**. Chunk splitting is performed on the original text, and each split chunk is redacted before being sent to the API. This preserves token estimation accuracy.
 
-### UX 출력
+### UX Output
 
 ```
-⠋ API 한도 확인 중...
+⠋ Checking API limits...
 ✓ ITPM: 30,000 | OTPM: 8,000 | RPM: 50
 
-✓ 세션 3개 분석 예정 (총 85,000 토큰 추정)
-  • session_abc123: 12,000 토큰 → 직접 분석
-  • session_def456: 48,000 토큰 → 요약 후 분석 (2 청크)
-  • session_ghi789: 25,000 토큰 → 직접 분석
+✓ 3 sessions to analyze (estimated 85,000 total tokens)
+  • session_abc123: 12,000 tokens → direct analysis
+  • session_def456: 48,000 tokens → summarize then analyze (2 chunks)
+  • session_ghi789: 25,000 tokens → direct analysis
 
-⠋ [1/3] session_abc123 분석 중...
-✓ [1/3] 완료
-⠋ 다음 요청까지 대기 중... (24초)
-⠋ [2/3] session_def456 요약 중... (청크 1/2)
-✓ [2/3] 요약 청크 1/2 완료
-⠋ 다음 요청까지 대기 중... (58초)
-⠋ [2/3] session_def456 요약 중... (청크 2/2)
-✓ [2/3] 요약 완료, 분석 중...
-✓ [2/3] 완료
-⠋ [3/3] session_ghi789 분석 중...
-✓ [3/3] 완료
+⠋ [1/3] Analyzing session_abc123...
+✓ [1/3] Complete
+⠋ Waiting for next request... (24s)
+⠋ [2/3] Summarizing session_def456... (chunk 1/2)
+✓ [2/3] Summary chunk 1/2 complete
+⠋ Waiting for next request... (58s)
+⠋ [2/3] Summarizing session_def456... (chunk 2/2)
+✓ [2/3] Summary complete, analyzing...
+✓ [2/3] Complete
+⠋ [3/3] Analyzing session_ghi789...
+✓ [3/3] Complete
 
-✓ 전체 분석 완료 (3분 12초)
+✓ Full analysis complete (3m 12s)
 ```
 
-### 변경 범위
+### Scope of Changes
 
-- `analyzer/mod.rs`: 기존 `analyze_entries()` 리팩터링. try-fallback 로직을 probe → plan → execute 흐름으로 교체. `analyze_entries_by_session()`, `is_context_limit_error()`, `is_rate_limit_error()` 제거.
+- `analyzer/mod.rs`: Refactor existing `analyze_entries()`. Replace try-fallback logic with probe → plan → execute flow. Remove `analyze_entries_by_session()`, `is_context_limit_error()`, `is_rate_limit_error()`.
 
-## 제거 대상
+## Removal Targets
 
-기존 fallback 관련 코드를 제거한다:
+Remove existing fallback-related code:
 
-- `analyzer/mod.rs`: `analyze_entries_by_session()` 함수
-- `analyzer/mod.rs`: `is_context_limit_error()`, `is_rate_limit_error()` 함수 및 테스트
-- `analyzer/mod.rs`: 400/429 에러 분기 로직
+- `analyzer/mod.rs`: `analyze_entries_by_session()` function
+- `analyzer/mod.rs`: `is_context_limit_error()`, `is_rate_limit_error()` functions and tests
+- `analyzer/mod.rs`: 400/429 error branching logic
 
-**유지:** `entry_session_id()` 헬퍼 함수 — 새 execute_plan에서 세션별 필터링에 사용. `prompt.rs`의 `extract_session_ids()`와 함께 유지.
+**Kept:** `entry_session_id()` helper function — used for per-session filtering in the new execute_plan. Kept alongside `prompt.rs`'s `extract_session_ids()`.
 
-**유지:** `merge_results()` (insight.rs) — 시그니처 변경 없이 그대로 사용.
+**Kept:** `merge_results()` (insight.rs) — used as-is with no signature changes.
 
-## 새 모듈 요약
+## New Module Summary
 
-| 모듈 | 책임 |
-|------|------|
-| `analyzer/planner.rs` (신규) | 실행 계획 수립 — RateLimits + SessionEstimate → ExecutionPlan |
-| `analyzer/summarizer.rs` (신규) | 대형 세션 청크 분할 및 요약 |
+| Module | Responsibility |
+|--------|---------------|
+| `analyzer/planner.rs` (new) | Execution plan building — RateLimits + SessionEstimate → ExecutionPlan |
+| `analyzer/summarizer.rs` (new) | Large session chunk splitting and summarization |
 
-## 변경 모듈 요약
+## Changed Module Summary
 
-| 모듈 | 변경 내용 |
-|------|---------|
-| `analyzer/mod.rs` | analyze_entries 리팩터링, fallback 제거, execute_plan 도입 |
-| `analyzer/anthropic.rs` | probe_rate_limits() 추가, 응답 헤더 파싱 |
-| `analyzer/openai.rs` | probe_rate_limits() 추가, 응답 헤더 파싱 |
-| `analyzer/provider.rs` | probe 디스패치 메서드 추가 |
-| `analyzer/prompt.rs` | estimate_sessions() 추가 |
+| Module | Changes |
+|--------|---------|
+| `analyzer/mod.rs` | Refactor analyze_entries, remove fallback, introduce execute_plan |
+| `analyzer/anthropic.rs` | Add probe_rate_limits(), response header parsing |
+| `analyzer/openai.rs` | Add probe_rate_limits(), response header parsing |
+| `analyzer/provider.rs` | Add probe dispatch method |
+| `analyzer/prompt.rs` | Add estimate_sessions() |
 
-## 테스트
+## Tests
 
-- `planner.rs`: 전략 분기 테스트 (single_shot, direct, summarize)
-- `planner.rs`: ITPM 경계값 테스트 (추정 토큰 == ITPM)
-- `prompt.rs`: 토큰 추정 테스트 (한국어, 영어, 혼합)
-- `prompt.rs`: 빈 세션(0 엔트리) 처리
-- `summarizer.rs`: 청크 분할 경계 테스트 (메시지 단위)
-- `summarizer.rs`: 단일 메시지가 ITPM 초과하는 극단 케이스
-- `mod.rs`: probe 실패 시 default_generous 적용 확인
-- `planner.rs`: default_generous 기반 계획이 is_single_shot=true가 되는지 확인
-- `mod.rs`: 스텝 부분 실패 시 나머지 계속 진행 확인
-- `mod.rs`: 429 재시도 실패 시 스킵 후 계속 진행 확인
+- `planner.rs`: strategy branching tests (single_shot, direct, summarize)
+- `planner.rs`: ITPM boundary value tests (estimated tokens == ITPM)
+- `prompt.rs`: token estimation tests (Korean, English, mixed)
+- `prompt.rs`: empty session (0 entries) handling
+- `summarizer.rs`: chunk splitting boundary tests (message units)
+- `summarizer.rs`: edge case where a single message exceeds ITPM
+- `mod.rs`: verify default_generous applied on probe failure
+- `planner.rs`: verify default_generous plan results in is_single_shot=true
+- `mod.rs`: verify remaining steps continue on partial step failure
+- `mod.rs`: verify skip-and-continue on 429 retry failure
 
-## 구현 시 참고
+## Implementation Notes
 
-- `docs/ARCHITECTURE.md`의 프로젝트 구조 트리에 새 모듈(`planner.rs`, `summarizer.rs`) 반영 필요
+- The project structure tree in `docs/ARCHITECTURE.md` needs to be updated to reflect new modules (`planner.rs`, `summarizer.rs`)
 
-## 관련 이슈
+## Related Issues
 
-- GitHub Issue #36 (closed): 대용량 로그 분석 시 LLM 토큰 제한 처리
+- GitHub Issue #36 (closed): Handling LLM token limits during large log analysis

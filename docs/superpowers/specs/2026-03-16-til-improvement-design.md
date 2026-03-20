@@ -1,71 +1,71 @@
-# TIL 섹션 개선 설계
+# TIL Section Improvement Design
 
-## 목표
+## Goal
 
-현재 `curiosities`/`corrections`에서 파생하는 얕은 TIL을 폐기하고, LLM이 "사용자가 실제로 배운 것"을 직접 추출하도록 변경한다. 각 항목은 제목(한 줄) + 맥락 설명(1-2줄) + 세션 ID로 구성된다.
+Deprecate the shallow TIL items derived from `curiosities`/`corrections`, and instead have the LLM directly extract "what the user actually learned." Each item consists of a title (one line) + context description (1-2 lines) + session ID.
 
-## 대상 독자
+## Target Audience
 
-미래의 나. 3개월 뒤 "이거 왜 이렇게 했더라?" 할 때 찾아보는 용도.
+My future self. For those moments three months from now when I wonder "why did I do it this way?"
 
-## 데이터 구조
+## Data Structure
 
-기존 `SessionInsight`에 `til` 필드 추가:
+Add a `til` field to the existing `SessionInsight`:
 
 ```rust
 pub struct TilItem {
-    pub title: String,      // 한 줄 제목 (배운 것)
-    pub detail: String,     // 1-2줄 맥락 설명 (왜, 어떻게 적용)
-    pub session_id: String, // 원본 세션 추적용
+    pub title: String,      // One-line title (what was learned)
+    pub detail: String,     // 1-2 line context (why, how it was applied)
+    pub session_id: String, // For tracing back to the original session
 }
 ```
 
 `AnalysisResult.sessions[].til: Vec<TilItem>`
 
-## LLM 프롬프트 변경
+## LLM Prompt Changes
 
-시스템 프롬프트 JSON 스키마에 `til` 필드 추가:
+Add a `til` field to the system prompt JSON schema:
 
 ```json
 "til": [
   {
-    "title": "배운 것을 한 줄로 (한국어)",
-    "detail": "왜 이게 필요했고 어떻게 적용했는지 1-2줄 (한국어)"
+    "title": "One-line summary of what was learned",
+    "detail": "Why it was needed and how it was applied, in 1-2 lines"
   }
 ]
 ```
 
-Rules에 TIL 추출 지침 추가:
-- curiosities나 corrections에서 파생하지 말고, 대화에서 사용자가 **실제로 배운 것**을 직접 추출
-- 일반 상식이 아닌, 이 세션의 맥락에서 유의미한 학습만 포함
-- 배운 게 없으면 빈 배열
+Add TIL extraction guidelines to the rules:
+- Do NOT derive from curiosities or corrections — directly extract what the user **actually learned** from the conversation
+- Include only learning that is meaningful in the context of this session, not general knowledge
+- Return an empty array if nothing was learned
 
-## Markdown 출력
+## Markdown Output
 
-하단 `## TIL` 섹션에 모든 세션의 항목을 합침. 각 항목에 세션 ID HTML 주석 포함.
+Combine all session items in a `## TIL` section at the bottom. Each item includes a session ID as an HTML comment.
 
 ```markdown
 ## TIL
 
-### serde의 tag 속성은 중첩 JSON에서 안 먹힌다
-Codex JSONL이 type 필드가 두 곳에 있어서 serde tag로 한번에 파싱이 안 됐다.
-2단계 파싱(loose → structured)으로 우회.
+### serde's tag attribute doesn't work with nested JSON
+Codex JSONL has the type field in two places, so serde tag couldn't parse it in one pass.
+Worked around it with two-stage parsing (loose → structured).
 <!-- session: d31e7507 -->
 
 ### chrono Local vs Utc
-DateTime<Utc>에 date_naive()만 쓰면 UTC 기준이라 KST 새벽 세션이 누락된다.
-with_timezone(&Local) 변환 후 비교해야 한다.
+Using just date_naive() on DateTime<Utc> compares against UTC, which causes early-morning KST sessions to be missed.
+Must convert with with_timezone(&Local) before comparing.
 <!-- session: 342dfbf0 -->
 ```
 
-## 영향 범위
+## Impact Scope
 
-| 파일 | 변경 |
-|------|------|
-| `analyzer/insight.rs` | `TilItem` 구조체 추가, `SessionInsight`에 `til` 필드 추가 |
-| `analyzer/provider.rs` | 시스템 프롬프트에 `til` 스키마 + 추출 규칙 추가 |
-| `output/markdown.rs` | `render_til_section` 수정 — 제목+설명+세션ID 주석 |
+| File | Change |
+|------|--------|
+| `analyzer/insight.rs` | Add `TilItem` struct, add `til` field to `SessionInsight` |
+| `analyzer/provider.rs` | Add `til` schema + extraction rules to system prompt |
+| `output/markdown.rs` | Modify `render_til_section` — title + description + session ID comment |
 
-## 기존 로직 제거
+## Removed Logic
 
-`output/markdown.rs`의 `render_session()`에서 `curiosities`/`corrections`를 `til_items`에 push하던 로직 제거. TIL은 오직 `SessionInsight.til` 필드에서만 가져옴. `curiosities`와 `corrections`는 각 세션 섹션에 그대로 유지.
+Remove the logic in `output/markdown.rs`'s `render_session()` that pushed `curiosities`/`corrections` into `til_items`. TIL items now come exclusively from the `SessionInsight.til` field. `curiosities` and `corrections` remain in their respective session sections as before.
