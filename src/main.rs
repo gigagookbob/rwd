@@ -293,6 +293,16 @@ async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // 현재 엔트리 수와 캐시의 엔트리 수를 비교하여 캐시가 최신인지 확인합니다.
+    let claude_count = collect_claude_entries(today).len();
+    let codex_count = collect_codex_sessions(today).len();
+    if cached.claude_entry_count != claude_count || cached.codex_session_count != codex_count {
+        let cached_total = cached.claude_entry_count + cached.codex_session_count;
+        let current_total = claude_count + codex_count;
+        eprintln!("{YELLOW}⚠ 캐시가 최신이 아닙니다. (캐시: {cached_total}개, 현재: {current_total}개){RESET}");
+        eprintln!("  최신 결과를 원하면 `rwd today`를 먼저 실행하세요.\n");
+    }
+
     // 모든 세션 work_summary를 하나의 텍스트로 합칩니다.
     let mut summaries_text = String::new();
     for (source_name, analysis) in &cached.sources {
