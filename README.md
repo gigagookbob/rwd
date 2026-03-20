@@ -66,8 +66,11 @@ enabled = false
 ## 사용법
 
 ```bash
-# 오늘의 AI Agent 세션 분석
-rwd today
+rwd today       # 오늘의 AI Agent 세션 분석 → Obsidian Daily Notes 저장
+rwd summary     # 개발 진척사항 요약 (Markdown) → Obsidian 저장 + 클립보드 복사
+rwd slack       # 슬랙 공유용 메시지 생성 → 클립보드 복사
+rwd config      # 설정 변경 (대화형 메뉴)
+rwd update      # 최신 버전으로 업데이트
 ```
 
 ## 삭제
