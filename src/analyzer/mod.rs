@@ -61,6 +61,7 @@ pub async fn analyze_entries(
     entries: &[LogEntry],
     redactor_enabled: bool,
     verbose: bool,
+    lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
 
@@ -141,12 +142,12 @@ pub async fn analyze_entries(
         } else {
             (prompt_text, RedactResult::empty())
         };
-        let raw_response = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32).await?;
+        let raw_response = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32, lang).await?;
         stop_spinner(sp);
         let result = insight::parse_response(&raw_response)?;
         Ok((result, redact_result))
     } else {
-        execute_plan(&plan, entries, &provider, &api_key, redactor_enabled).await
+        execute_plan(&plan, entries, &provider, &api_key, redactor_enabled, lang).await
     }
 }
 
@@ -162,16 +163,16 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
 }
 
 /// Generates a development progress summary from concatenated session work_summaries.
-pub async fn analyze_summary(session_summaries: &str) -> Result<String, AnalyzerError> {
+pub async fn analyze_summary(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let raw_response = provider.call_summary_api(&api_key, session_summaries).await?;
+    let raw_response = provider.call_summary_api(&api_key, session_summaries, lang).await?;
     Ok(raw_response)
 }
 
 /// Generates a Slack-ready message from concatenated session work_summaries.
-pub async fn analyze_slack(session_summaries: &str) -> Result<String, AnalyzerError> {
+pub async fn analyze_slack(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let raw_response = provider.call_slack_api(&api_key, session_summaries).await?;
+    let raw_response = provider.call_slack_api(&api_key, session_summaries, lang).await?;
     Ok(raw_response)
 }
 
@@ -180,6 +181,7 @@ pub async fn analyze_codex_entries(
     entries: &[CodexEntry],
     session_id: &str,
     redactor_enabled: bool,
+    lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
     let prompt_text = prompt::build_codex_prompt(entries, session_id)?;
@@ -188,7 +190,7 @@ pub async fn analyze_codex_entries(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(&api_key, &final_prompt, 1_950).await?;
+    let raw_response = provider.call_api(&api_key, &final_prompt, 1_950, lang).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -200,6 +202,7 @@ async fn execute_plan(
     provider: &provider::LlmProvider,
     api_key: &str,
     redactor_enabled: bool,
+    lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let mut results = Vec::new();
     let mut total_redact = RedactResult::empty();
@@ -225,7 +228,7 @@ async fn execute_plan(
         let result = match &step.strategy {
             StepStrategy::Direct => {
                 execute_direct_step(
-                    &session_entries, provider, api_key, redactor_enabled,
+                    &session_entries, provider, api_key, redactor_enabled, lang,
                 )
                 .await
             }
@@ -237,6 +240,7 @@ async fn execute_plan(
                     api_key,
                     &plan.rate_limits,
                     redactor_enabled,
+                    lang,
                 )
                 .await
             }
@@ -271,6 +275,7 @@ async fn execute_plan(
                                 provider,
                                 api_key,
                                 redactor_enabled,
+                                lang,
                             )
                             .await
                         }
@@ -282,6 +287,7 @@ async fn execute_plan(
                                 api_key,
                                 &plan.rate_limits,
                                 redactor_enabled,
+                                lang,
                             )
                             .await
                         }
@@ -315,14 +321,14 @@ async fn execute_plan(
                     let retry = match &step.strategy {
                         StepStrategy::Direct => {
                             execute_direct_step(
-                                &session_entries, provider, api_key, redactor_enabled,
+                                &session_entries, provider, api_key, redactor_enabled, lang,
                             )
                             .await
                         }
                         StepStrategy::Summarize { .. } => {
                             execute_summarize_step(
                                 &session_entries, &step.session_id,
-                                provider, api_key, &plan.rate_limits, redactor_enabled,
+                                provider, api_key, &plan.rate_limits, redactor_enabled, lang,
                             )
                             .await
                         }
@@ -375,6 +381,7 @@ async fn execute_direct_step(
     provider: &provider::LlmProvider,
     api_key: &str,
     redactor_enabled: bool,
+    lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let prompt_text = prompt::build_prompt(entries)?;
     let (final_prompt, redact_result) = if redactor_enabled {
@@ -382,7 +389,7 @@ async fn execute_direct_step(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 4_096).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -395,12 +402,13 @@ async fn execute_summarize_step(
     api_key: &str,
     limits: &planner::RateLimits,
     redactor_enabled: bool,
+    lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let messages = prompt::extract_messages(entries);
     let chunks =
         summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
     let summary_text =
-        summarizer::summarize_chunks(&chunks, provider, api_key, limits).await?;
+        summarizer::summarize_chunks(&chunks, provider, api_key, limits, lang).await?;
 
     let prompt_with_session = format!("[Session: {session_id}]\n{summary_text}");
     let (final_prompt, redact_result) = if redactor_enabled {
@@ -408,7 +416,7 @@ async fn execute_summarize_step(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 4_096).await?;
+    let raw_response = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
