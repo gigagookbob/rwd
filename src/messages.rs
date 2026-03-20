@@ -423,8 +423,8 @@ pub mod update {
 
 /// Language configuration messages (placeholder for future i18n).
 pub mod lang {
-    pub const SELECT: &str = "Select language";
-    pub const NOT_CONFIGURED: &str = "Language not configured";
+    pub const SELECT: &str = "Language (en/ko) [default: en]: ";
+    pub const NOT_CONFIGURED: &str = "Language not configured. Please select (en/ko) [default: en]: ";
 
     pub fn saved(lang: &str) -> String {
         format!("Language saved: {lang}")

@@ -96,6 +96,8 @@ fn resolve_lang(
     }
     // 3. Migration prompt — ask user and save to config
     eprint!("{}", crate::messages::lang::NOT_CONFIGURED);
+    use std::io::Write;
+    let _ = std::io::stderr().flush();
     let mut input = String::new();
     std::io::stdin().read_line(&mut input)?;
     let lang = match input.trim() {
