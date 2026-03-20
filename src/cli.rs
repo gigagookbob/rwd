@@ -17,6 +17,9 @@ pub enum Commands {
         /// Show detailed execution plan per session
         #[arg(long, short)]
         verbose: bool,
+        /// Override output language (en/ko)
+        #[arg(long)]
+        lang: Option<String>,
     },
     /// Run initial setup (API key, output path)
     Init,
@@ -30,7 +33,15 @@ pub enum Commands {
     /// Update to the latest version
     Update,
     /// Generate a development progress summary
-    Summary,
+    Summary {
+        /// Override output language (en/ko)
+        #[arg(long)]
+        lang: Option<String>,
+    },
     /// Generate a Slack-ready share message
-    Slack,
+    Slack {
+        /// Override output language (en/ko)
+        #[arg(long)]
+        lang: Option<String>,
+    },
 }
