@@ -18,7 +18,7 @@ use chrono::NaiveDate;
 /// PathBuf는 &Path의 소유 버전입니다 (Rust Book Ch.12 참조).
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
     let config = crate::config::load_config_if_exists()
-        .ok_or("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.")?;
+        .ok_or(crate::messages::error::NO_CONFIG)?;
 
     let path = PathBuf::from(&config.output.path);
     if !path.exists() {

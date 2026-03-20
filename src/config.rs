@@ -53,7 +53,7 @@ pub struct RedactorConfig {
 /// dirs::home_dir()로 홈 디렉토리를 찾고, Unix 관례에 맞게 ~/.config를 사용합니다.
 pub fn config_path() -> Result<PathBuf, ConfigError> {
     let home = dirs::home_dir()
-        .ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+        .ok_or(crate::messages::error::HOME_DIR_NOT_FOUND)?;
     Ok(home.join(".config").join("rwd").join("config.toml"))
 }
 
@@ -105,7 +105,7 @@ pub fn run_init() -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
     // 프로바이더 선택
-    eprint!("LLM 프로바이더를 선택하세요 (anthropic/openai) [anthropic]: ");
+    eprint!("{}", crate::messages::init::SELECT_PROVIDER);
     let mut provider_input = String::new();
     std::io::stdin().read_line(&mut provider_input)?;
     let provider = provider_input.trim();
@@ -113,21 +113,21 @@ pub fn run_init() -> Result<(), ConfigError> {
 
     // 프로바이더 검증
     if !["anthropic", "openai"].contains(&provider) {
-        return Err(format!("지원하지 않는 프로바이더: {provider}").into());
+        return Err(crate::messages::init::unsupported_provider(provider).into());
     }
 
     // API 키 입력 — rpassword로 마스킹 (터미널에 입력이 보이지 않음)
     let key_prompt = match provider {
-        "anthropic" => "Anthropic API 키를 입력하세요: ",
-        "openai" => "OpenAI API 키를 입력하세요: ",
+        "anthropic" => crate::messages::init::ENTER_API_KEY_ANTHROPIC,
+        "openai" => crate::messages::init::ENTER_API_KEY_OPENAI,
         _ => unreachable!(),
     };
     let api_key = rpassword::prompt_password(key_prompt)
-        .map_err(|e| format!("API 키 입력 실패: {e}"))?;
+        .map_err(|e| crate::messages::init::api_key_input_failed(&e))?;
     let api_key = api_key.trim().to_string();
 
     if api_key.is_empty() {
-        return Err("API 키가 비어있습니다.".into());
+        return Err(crate::messages::init::API_KEY_EMPTY.into());
     }
 
     // 마스킹된 키 표시 (앞 8자만 보여주고 나머지는 ***)
@@ -136,12 +136,12 @@ pub fn run_init() -> Result<(), ConfigError> {
     } else {
         "***".to_string()
     };
-    eprintln!("API 키 설정됨: {masked}");
+    eprintln!("{}", crate::messages::init::api_key_set(&masked));
 
     // 출력 경로 — vault 감지 결과를 기본값으로 제안하고, 사용자에게 확인받습니다.
     let default_path = detect_obsidian_vault()
         .unwrap_or_else(default_output_path);
-    eprint!("마크다운 저장 경로 [{}]: ", default_path.display());
+    eprint!("{}", crate::messages::init::output_path_prompt(&default_path.display()));
     let mut path_input = String::new();
     std::io::stdin().read_line(&mut path_input)?;
     let path_input = path_input.trim();
@@ -150,7 +150,7 @@ pub fn run_init() -> Result<(), ConfigError> {
     } else {
         PathBuf::from(path_input)
     };
-    eprintln!("출력 경로: {}", output_path.display());
+    eprintln!("{}", crate::messages::init::output_path_set(&output_path.display()));
 
     let config = Config {
         llm: LlmConfig {
@@ -164,7 +164,7 @@ pub fn run_init() -> Result<(), ConfigError> {
     };
 
     save_config(&config, &config_file)?;
-    eprintln!("설정 저장 완료: {}", config_file.display());
+    eprintln!("{}", crate::messages::init::config_saved(&config_file.display()));
     Ok(())
 }
 
@@ -174,7 +174,7 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
     if !config_file.exists() {
-        return Err("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.".into());
+        return Err(crate::messages::config::NO_CONFIG.into());
     }
 
     let mut config = load_config(&config_file)?;
@@ -182,25 +182,21 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     match key {
         "output-path" => {
             config.output.path = value.to_string();
-            eprintln!("출력 경로 변경: {value}");
+            eprintln!("{}", crate::messages::config::output_path_changed(value));
         }
         "provider" => {
             if !["anthropic", "openai"].contains(&value) {
-                return Err(format!(
-                    "지원하지 않는 프로바이더: '{value}'. 사용 가능: anthropic, openai"
-                ).into());
+                return Err(crate::messages::config::unsupported_provider(value).into());
             }
             config.llm.provider = value.to_string();
-            eprintln!("LLM 프로바이더 변경: {value}");
+            eprintln!("{}", crate::messages::config::provider_changed(value));
         }
         "api-key" => {
             config.llm.api_key = value.to_string();
-            eprintln!("API 키 변경됨: {}", mask_api_key(value));
+            eprintln!("{}", crate::messages::config::api_key_changed(&mask_api_key(value)));
         }
         _ => {
-            return Err(format!(
-                "알 수 없는 설정 키: '{key}'. 사용 가능: output-path, provider, api-key"
-            ).into());
+            return Err(crate::messages::config::unknown_key(key).into());
         }
     }
 
@@ -253,7 +249,7 @@ async fn verify_api_key(provider: &str, api_key: &str) {
     let yellow = "\x1b[33m";
     let reset = "\x1b[0m";
 
-    eprint!("{dim}  API 키 검증 중...{reset}");
+    eprint!("{dim}{}{reset}", crate::messages::verify::VERIFYING_KEY);
 
     let client = match reqwest::Client::builder()
         .timeout(std::time::Duration::from_secs(5))
@@ -261,7 +257,7 @@ async fn verify_api_key(provider: &str, api_key: &str) {
     {
         Ok(c) => c,
         Err(_) => {
-            eprintln!("\r{dim}  API 키 검증 건너뜀 (HTTP 클라이언트 생성 실패){reset}");
+            eprintln!("\r{dim}{}{reset}", crate::messages::verify::VERIFY_SKIPPED_CLIENT);
             return;
         }
     };
@@ -288,14 +284,14 @@ async fn verify_api_key(provider: &str, api_key: &str) {
     // \r로 "검증 중..." 줄을 덮어씁니다.
     match result {
         Ok(resp) if resp.status().is_success() => {
-            eprintln!("\r{green}  ✓ API 키 확인됨{reset}                    ");
+            eprintln!("\r{green}{}{reset}                    ", crate::messages::verify::KEY_VERIFIED);
         }
         Ok(resp) => {
             let status = resp.status().as_u16();
-            eprintln!("\r{yellow}  ⚠ API 키가 유효하지 않습니다 ({status}). 키를 확인하세요.{reset}");
+            eprintln!("\r{yellow}{}{reset}", crate::messages::verify::key_invalid(status));
         }
         Err(_) => {
-            eprintln!("\r{dim}  API 키 검증 건너뜀 (네트워크 오류){reset}       ");
+            eprintln!("\r{dim}{}{reset}       ", crate::messages::verify::VERIFY_SKIPPED_NETWORK);
         }
     }
 }
@@ -322,7 +318,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
     if !config_file.exists() {
-        return Err("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.".into());
+        return Err(crate::messages::config::NO_CONFIG.into());
     }
 
     let mut config = load_config(&config_file)?;
@@ -333,7 +329,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
     let dim = "\x1b[2m";
     let reset = "\x1b[0m";
 
-    eprintln!("{dim}  ↑↓ 이동 · Enter 선택 · Esc 나가기{reset}");
+    eprintln!("{dim}{}{reset}", crate::messages::config::NAV_HINT);
 
     // loop로 메뉴를 반복합니다 — Esc나 "나가기"를 선택하면 break로 탈출합니다.
     loop {
@@ -344,13 +340,13 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             format!("{cyan}api-key{reset}       {dim}[{}]{reset}", mask_api_key(&config.llm.api_key)),
             format!("{cyan}output-path{reset}   {dim}[{}]{reset}", config.output.path),
             format!("{cyan}redactor{reset}      {dim}[{}]{reset}", redactor_status),
-            format!("{dim}나가기{reset}"),
+            format!("{dim}{}{reset}", crate::messages::config::EXIT),
         ];
 
         // interact_opt()는 Esc를 누르면 Ok(None)을 반환합니다.
         // interact()와 달리 취소 동작을 지원하는 메서드입니다.
         let selection = Select::with_theme(&theme)
-            .with_prompt("변경할 설정을 선택하세요")
+            .with_prompt(crate::messages::config::SELECT_SETTING)
             .items(&items)
             .default(0)
             .interact_opt()?;
@@ -372,7 +368,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
 
                 // 하위 Select도 interact_opt()로 Esc 뒤로가기를 지원합니다.
                 let Some(chosen) = Select::with_theme(&theme)
-                    .with_prompt("LLM 프로바이더")
+                    .with_prompt(crate::messages::config::LLM_PROVIDER)
                     .items(&providers)
                     .default(current_idx)
                     .interact_opt()?
@@ -382,18 +378,18 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
 
                 let new_provider = providers[chosen];
                 if new_provider == old {
-                    eprintln!("{dim}  변경 없음{reset}\n");
+                    eprintln!("{dim}{}{reset}\n", crate::messages::config::NO_CHANGE);
                 } else {
                     config.llm.provider = new_provider.to_string();
                     save_config(&config, &config_file)?;
-                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old}{reset} → {new_provider}");
+                    eprintln!("{green}{}{reset}", crate::messages::config::changed(&old, new_provider));
                     verify_api_key(&config.llm.provider, &config.llm.api_key).await;
                     eprintln!();
                 }
             }
             // api-key — 커스텀 패스워드 입력 (Esc = 취소)
             1 => {
-                let Some(new_key) = read_password_with_esc("  새 API 키: ")? else {
+                let Some(new_key) = read_password_with_esc(crate::messages::config::NEW_API_KEY)? else {
                     continue;
                 };
                 let new_key = new_key.trim().to_string();
@@ -404,7 +400,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 // Confirm 위젯: y/n 또는 yes/no로 확인을 받습니다.
                 // .default(false)로 기본값을 "no"로 설정하여 실수 방지합니다.
                 let confirmed = Confirm::with_theme(&theme)
-                    .with_prompt("API 키를 변경하시겠습니까?")
+                    .with_prompt(crate::messages::config::CONFIRM_API_KEY)
                     .default(false)
                     .interact()?;
                 if !confirmed {
@@ -414,8 +410,8 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 config.llm.api_key = new_key;
                 save_config(&config, &config_file)?;
                 eprintln!(
-                    "{green}  ✓ 변경됨{reset} {dim}{old_masked}{reset} → {}",
-                    mask_api_key(&config.llm.api_key)
+                    "{green}{}{reset}",
+                    crate::messages::config::changed(&old_masked, &mask_api_key(&config.llm.api_key))
                 );
                 verify_api_key(&config.llm.provider, &config.llm.api_key).await;
                 eprintln!();
@@ -424,16 +420,16 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             2 => {
                 let old = config.output.path.clone();
                 let new_path: String = Input::with_theme(&theme)
-                    .with_prompt("마크다운 저장 경로")
+                    .with_prompt(crate::messages::config::OUTPUT_PATH)
                     .default(old.clone())
                     .interact_text()?;
 
                 if new_path == old {
-                    eprintln!("{dim}  변경 없음{reset}\n");
+                    eprintln!("{dim}{}{reset}\n", crate::messages::config::NO_CHANGE);
                 } else {
                     config.output.path = new_path.clone();
                     save_config(&config, &config_file)?;
-                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old}{reset} → {new_path}\n");
+                    eprintln!("{green}{}{reset}\n", crate::messages::config::changed(&old, &new_path));
                 }
             }
             // redactor — Select로 on/off 선택
@@ -443,7 +439,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 let current_idx = if old_enabled { 0 } else { 1 };
 
                 let Some(chosen) = Select::with_theme(&theme)
-                    .with_prompt("민감 정보 마스킹")
+                    .with_prompt(crate::messages::config::REDACTOR)
                     .items(&options)
                     .default(current_idx)
                     .interact_opt()?
@@ -453,13 +449,13 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
 
                 let enabled = chosen == 0;
                 if enabled == old_enabled {
-                    eprintln!("{dim}  변경 없음{reset}\n");
+                    eprintln!("{dim}{}{reset}\n", crate::messages::config::NO_CHANGE);
                 } else {
                     config.redactor = Some(RedactorConfig { enabled });
                     save_config(&config, &config_file)?;
                     let old_label = if old_enabled { "on" } else { "off" };
                     let new_label = options[chosen];
-                    eprintln!("{green}  ✓ 변경됨{reset} {dim}{old_label}{reset} → {new_label}\n");
+                    eprintln!("{green}{}{reset}\n", crate::messages::config::changed(old_label, new_label));
                 }
             }
             // 나가기 — Select가 출력한 "✔ ... 나가기" 줄을 지웁니다.
@@ -472,7 +468,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
         }
     }
 
-    eprintln!("\x1b[32m설정이 저장되었습니다.\x1b[0m \x1b[2m{}\x1b[0m", config_file.display());
+    eprintln!("\x1b[32m{}\x1b[0m", crate::messages::config::config_saved(&config_file.display()));
     Ok(())
 }
 

@@ -41,7 +41,7 @@ pub struct TodayCache {
 /// dirs::home_dir()은 OS별 홈 디렉토리를 반환합니다.
 /// Option::ok_or()는 None일 때 에러로 변환합니다 (Rust Book Ch.9 참조).
 fn cache_dir() -> Result<PathBuf, CacheError> {
-    let home = dirs::home_dir().ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+    let home = dirs::home_dir().ok_or(crate::messages::error::HOME_DIR_NOT_FOUND)?;
     let dir = home.join(".rwd").join("cache");
     std::fs::create_dir_all(&dir)?;
     Ok(dir)

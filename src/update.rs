@@ -22,7 +22,7 @@ pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>
     let tag = resp
         .get("tag_name")
         .and_then(|v| v.as_str())
-        .ok_or("릴리즈 태그를 찾을 수 없습니다")?;
+        .ok_or(crate::messages::error::RELEASE_TAG_NOT_FOUND)?;
 
     // "v0.1.0" → "0.1.0"
     Ok(tag.trim_start_matches('v').to_string())
@@ -63,9 +63,10 @@ pub async fn notify_if_update_available() {
 fn print_update_notice(latest_version: &str) {
     if latest_version != CURRENT_VERSION {
         eprintln!(
-            "새 버전이 있습니다: v{latest_version} (현재: v{CURRENT_VERSION})"
+            "{}",
+            crate::messages::update::new_version_available(latest_version, CURRENT_VERSION)
         );
-        eprintln!("업데이트: rwd update\n");
+        eprintln!("{}\n", crate::messages::update::UPDATE_HINT);
     }
 }
 
@@ -77,11 +78,11 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     let latest = check_latest_version().await?;
 
     if latest == CURRENT_VERSION {
-        eprintln!("이미 최신 버전입니다: v{CURRENT_VERSION}");
+        eprintln!("{}", crate::messages::update::already_latest(CURRENT_VERSION));
         return Ok(());
     }
 
-    eprintln!("v{CURRENT_VERSION} → v{latest} 업데이트 중...");
+    eprintln!("{}", crate::messages::update::updating(CURRENT_VERSION, &latest));
 
     // 플랫폼별 에셋 이름 결정
     let asset_name = detect_asset_name()?;
@@ -90,7 +91,7 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     // 바이너리 다운로드
-    eprintln!("다운로드: {download_url}");
+    eprintln!("{}", crate::messages::update::downloading(&download_url));
     let client = reqwest::Client::new();
     let bytes = client
         .get(&download_url)
@@ -114,7 +115,7 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
         .status()?;
 
     if !status.success() {
-        return Err("압축 해제 실패".into());
+        return Err(crate::messages::error::EXTRACT_FAILED.into());
     }
 
     // 추출된 바이너리 찾기
@@ -135,7 +136,7 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     };
     let _ = crate::cache::save_update_check(&cache);
 
-    eprintln!("rwd v{latest} 업데이트 완료!");
+    eprintln!("{}", crate::messages::update::update_complete(&latest));
     Ok(())
 }
 
@@ -148,7 +149,7 @@ fn detect_asset_name() -> Result<String, Box<dyn std::error::Error>> {
         ("macos", "aarch64") => "rwd-aarch64-apple-darwin.tar.gz",
         ("macos", "x86_64") => "rwd-x86_64-apple-darwin.tar.gz",
         ("linux", "x86_64") => "rwd-x86_64-unknown-linux-gnu.tar.gz",
-        _ => return Err(format!("지원하지 않는 플랫폼: {os}-{arch}").into()),
+        _ => return Err(crate::messages::error::unsupported_platform(os, arch).into()),
     };
     Ok(name.to_string())
 }
@@ -163,7 +164,7 @@ fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::err
             return Ok(path);
         }
     }
-    Err("업데이트 바이너리를 찾을 수 없습니다".into())
+    Err(crate::messages::error::BINARY_NOT_FOUND.into())
 }
 
 /// 바이너리를 교체합니다.
@@ -184,14 +185,14 @@ fn replace_binary(
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             // sudo로 재시도
-            eprintln!("관리자 권한이 필요합니다.");
+            eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
             let status = std::process::Command::new("sudo")
                 .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
                 .status()?;
             if status.success() {
                 Ok(())
             } else {
-                Err("바이너리 교체 실패".into())
+                Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
             }
         }
         Err(e) => Err(e.into()),

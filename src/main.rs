@@ -52,7 +52,7 @@ async fn main() {
         }
         Commands::Init => {
             if let Err(e) = config::run_init() {
-                eprintln!("초기 설정 실패: {e}");
+                eprintln!("{}", crate::messages::error::init_failed(&e));
                 std::process::exit(1);
             }
         }
@@ -60,16 +60,16 @@ async fn main() {
             let result = match (key, value) {
                 (Some(k), Some(v)) => config::run_config(&k, &v),
                 (None, None) => config::run_config_interactive().await,
-                _ => Err("사용법: `rwd config` (대화형) 또는 `rwd config <key> <value>`".into()),
+                _ => Err(crate::messages::config::USAGE.into()),
             };
             if let Err(e) = result {
-                eprintln!("설정 변경 실패: {e}");
+                eprintln!("{}", crate::messages::error::config_failed(&e));
                 std::process::exit(1);
             }
         }
         Commands::Update => {
             if let Err(e) = update::run_update().await {
-                eprintln!("업데이트 실패: {e}");
+                eprintln!("{}", crate::messages::error::update_failed(&e));
                 std::process::exit(1);
             }
         }
@@ -96,7 +96,7 @@ async fn main() {
 async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
     let loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
-        eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
+        eprintln!("{}", crate::messages::error::NO_CONFIG);
         std::process::exit(1);
     }
     let redactor_enabled = loaded_config.as_ref().unwrap().is_redactor_enabled();
@@ -145,7 +145,7 @@ async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
         && cached.claude_entry_count == claude_count
         && cached.codex_session_count == codex_count
     {
-        println!("\n캐시된 분석 결과를 사용합니다. (엔트리 수 변경 없음)");
+        println!("\n{}", crate::messages::status::CACHE_USED);
         let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
             .sources
             .iter()
@@ -162,7 +162,7 @@ async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
-    println!("\n{MAGENTA}{provider_label} API로 인사이트 분석 중...{RESET}");
+    println!("\n{MAGENTA}{}{RESET}", crate::messages::status::analyzing(&provider_label));
 
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
@@ -183,7 +183,7 @@ async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
 
     // 결과 출력 및 저장
     if total_redact.total_count > 0 {
-        println!("민감 정보 {}건 마스킹됨 ({})", total_redact.total_count, total_redact.format_summary());
+        println!("{}", crate::messages::status::redacted(total_redact.total_count, &total_redact.format_summary()));
     }
 
     if !sources.is_empty() {
@@ -204,10 +204,10 @@ async fn run_today(verbose: bool) -> Result<(), parser::ParseError> {
             sources,
         };
         if let Err(e) = cache::save_cache(&cache_data, today) {
-            eprintln!("캐시 저장 실패: {e}");
+            eprintln!("{}", crate::messages::error::cache_save_failed(&e));
         }
 
-        println!("\n{GREEN}오늘의 daily rewind가 완성되었습니다!{RESET}");
+        println!("\n{GREEN}{}{RESET}", crate::messages::status::REWIND_DONE);
     }
 
     Ok(())
@@ -225,12 +225,12 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
-            println!("캐시가 없습니다. today 분석을 먼저 실행합니다...");
+            println!("{}", crate::messages::error::NO_CACHE);
             run_today(false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
-                    eprintln!("분석 후에도 캐시를 찾을 수 없습니다.");
+                    eprintln!("{}", crate::messages::error::NO_CACHE_AFTER_ANALYSIS);
                     std::process::exit(1);
                 }
             }
@@ -250,14 +250,14 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if summaries_text.is_empty() {
-        println!("요약할 세션이 없습니다.");
+        println!("{}", crate::messages::error::NO_SESSIONS);
         return Ok(());
     }
 
-    println!("개발 진척사항 요약 생성 중...");
+    println!("{}", crate::messages::status::SUMMARY_GENERATING);
     let summary = analyzer::analyze_summary(&summaries_text).await?;
 
-    println!("\n=== 개발 진척사항 ===");
+    println!("\n{}", crate::messages::status::SUMMARY_HEADER);
     println!("{summary}");
 
     // Daily Markdown 파일에 요약 섹션을 추가합니다.
@@ -265,7 +265,7 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
 
     // 클립보드에 복사합니다.
     copy_to_clipboard(&summary);
-    println!("\n클립보드에 복사되었습니다.");
+    println!("\n{}", crate::messages::status::COPIED_TO_CLIPBOARD);
 
     Ok(())
 }
@@ -282,12 +282,12 @@ async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
-            println!("캐시가 없습니다. today 분석을 먼저 실행합니다...");
+            println!("{}", crate::messages::error::NO_CACHE);
             run_today(false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
-                    eprintln!("분석 후에도 캐시를 찾을 수 없습니다.");
+                    eprintln!("{}", crate::messages::error::NO_CACHE_AFTER_ANALYSIS);
                     std::process::exit(1);
                 }
             }
@@ -300,8 +300,9 @@ async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
     if cached.claude_entry_count != claude_count || cached.codex_session_count != codex_count {
         let cached_total = cached.claude_entry_count + cached.codex_session_count;
         let current_total = claude_count + codex_count;
-        eprintln!("{YELLOW}⚠ 캐시가 최신이 아닙니다. (캐시: {cached_total}개, 현재: {current_total}개){RESET}");
-        eprintln!("  최신 결과를 원하면 `rwd today`를 먼저 실행하세요.\n");
+        eprintln!("{YELLOW}{}{RESET}", crate::messages::status::cache_stale(cached_total, current_total));
+        eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
+        eprintln!();
     }
 
     // 모든 세션 work_summary를 하나의 텍스트로 합칩니다.
@@ -316,17 +317,17 @@ async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     if summaries_text.is_empty() {
-        println!("요약할 세션이 없습니다.");
+        println!("{}", crate::messages::error::NO_SESSIONS);
         return Ok(());
     }
 
-    println!("슬랙 공유 메시지 생성 중...");
+    println!("{}", crate::messages::status::SLACK_GENERATING);
     let slack_message = analyzer::analyze_slack(&summaries_text).await?;
 
     println!("\n{slack_message}");
 
     copy_to_clipboard(&slack_message);
-    println!("\n클립보드에 복사되었습니다.");
+    println!("\n{}", crate::messages::status::COPIED_TO_CLIPBOARD);
 
     Ok(())
 }
@@ -364,26 +365,26 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Vault 경로 로드 실패: {e}");
+            eprintln!("{}", crate::messages::error::vault_path_load_failed(&e));
             return;
         }
     };
 
     let file_path = vault_path.join(format!("{date}.md"));
     if !file_path.exists() {
-        eprintln!("Daily Markdown 파일이 없습니다: {}", file_path.display());
+        eprintln!("{}", crate::messages::error::daily_markdown_not_found(&file_path.display()));
         return;
     }
 
     let existing = match std::fs::read_to_string(&file_path) {
         Ok(s) => s,
         Err(e) => {
-            eprintln!("파일 읽기 실패: {e}");
+            eprintln!("{}", crate::messages::error::file_read_failed(&e));
             return;
         }
     };
 
-    let section_header = "## 개발 진척사항";
+    let section_header = crate::messages::markdown::PROGRESS_SECTION_HEADER;
     let new_section = format!("{section_header}\n\n{summary}\n");
 
     // 기존 섹션이 있으면 교체, 없으면 끝에 추가합니다.
@@ -403,8 +404,8 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
     };
 
     match std::fs::write(&file_path, updated) {
-        Ok(()) => println!("Markdown 저장 완료: {}", file_path.display()),
-        Err(e) => eprintln!("파일 저장 실패: {e}"),
+        Ok(()) => println!("{}", crate::messages::status::markdown_saved(&file_path.display())),
+        Err(e) => eprintln!("{}", crate::messages::error::file_save_failed(&e)),
     }
 }
 
@@ -536,7 +537,7 @@ fn save_combined_analysis(
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Vault 경로 로드 실패: {e}");
+            eprintln!("{}", crate::messages::error::vault_path_load_failed(&e));
             return;
         }
     };
@@ -544,8 +545,8 @@ fn save_combined_analysis(
     let markdown = output::render_combined_markdown(sources, date);
 
     match output::save_to_vault(&vault_path, date, &markdown) {
-        Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
-        Err(e) => eprintln!("파일 저장 실패: {e}"),
+        Ok(saved) => println!("\n{}", crate::messages::status::markdown_saved(&saved.display())),
+        Err(e) => eprintln!("{}", crate::messages::error::file_save_failed(&e)),
     }
 }
 
@@ -587,11 +588,10 @@ fn print_info_box(
         rows.push(("plain", time_range));
 
         let (total_in, total_out) = claude_total_tokens(summaries);
-        rows.push(("plain", format!(
-            "세션 수 {}  in {}  out {}",
+        rows.push(("plain", crate::messages::display::session_count_with_tokens(
             summaries.len(),
-            format_number(total_in),
-            format_number(total_out)
+            &format_number(total_in),
+            &format_number(total_out),
         )));
     }
 
@@ -602,9 +602,9 @@ fn print_info_box(
         let earliest = codex_earliest_time(codex_sessions);
         let time_range = format_time_range(earliest, now);
         rows.push(("plain", time_range));
-        rows.push(("plain", format!("세션 수 {}", codex_sessions.len())));
+        rows.push(("plain", crate::messages::display::session_count(codex_sessions.len())));
     } else {
-        rows.push(("plain", "세션 없음".to_string()));
+        rows.push(("plain", crate::messages::display::NO_SESSIONS.to_string()));
     }
 
     // 가장 긴 텍스트의 표시 너비를 기준으로 박스 너비를 결정합니다.
@@ -687,10 +687,10 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
             &session.session_id
         };
         println!("\n{BRIGHT_BLUE}  ▸ Session: {id_short}{RESET}");
-        println!("  요약: {}", session.work_summary);
+        println!("{}", crate::messages::display::summary_line(&session.work_summary));
 
         if !session.decisions.is_empty() {
-            println!("\n  {YELLOW}선택 분기{RESET}");
+            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::DECISIONS_LABEL);
             for d in &session.decisions {
                 println!("  • {}", d.what);
                 println!("    {DIM}→ {}{RESET}", d.why);
@@ -698,14 +698,14 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
         }
 
         if !session.curiosities.is_empty() {
-            println!("\n  {YELLOW}궁금/헷갈렸던 것{RESET}");
+            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::CURIOSITIES_LABEL);
             for c in &session.curiosities {
                 println!("  • {c}");
             }
         }
 
         if !session.corrections.is_empty() {
-            println!("\n  {YELLOW}모델 수정{RESET}");
+            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::CORRECTIONS_LABEL);
             for c in &session.corrections {
                 println!("  {RED}\u{2717} {}{RESET}", c.model_said);
                 println!("  {GREEN}\u{2713} {}{RESET}", c.user_corrected);

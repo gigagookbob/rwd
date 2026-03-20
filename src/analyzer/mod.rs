@@ -63,7 +63,7 @@ async fn countdown_sleep(total_secs: u64) {
     for remaining in (1..=total_secs).rev() {
         // 1초를 80ms 단위로 나눠서 스피너 애니메이션을 계속 돌립니다.
         for _ in 0..12 {
-            eprint!("\r{} 다음 요청까지 대기 중... ({remaining}초)", frames[i % frames.len()]);
+            eprint!("\r{} {}", frames[i % frames.len()], crate::messages::status::countdown_waiting(remaining));
             let _ = std::io::stderr().flush();
             i += 1;
             tokio::time::sleep(std::time::Duration::from_millis(83)).await;
@@ -82,22 +82,26 @@ pub async fn analyze_entries(
     let (provider, api_key) = provider::load_provider()?;
 
     // 1. Probe: 사용자의 실제 rate limit 확인
-    let sp = start_spinner("API 한도 확인 중...".into());
+    let sp = start_spinner(crate::messages::status::PROBING_RATE_LIMITS.into());
     let (limits, probed) = provider.probe_rate_limits(&api_key).await;
     stop_spinner(sp);
     if probed {
         eprintln!(
-            "✓ ITPM: {} | OTPM: {} | RPM: {}",
-            limits.input_tokens_per_minute,
-            limits.output_tokens_per_minute,
-            limits.requests_per_minute,
+            "{}",
+            crate::messages::status::rate_limit_ok(
+                limits.input_tokens_per_minute,
+                limits.output_tokens_per_minute,
+                limits.requests_per_minute,
+            )
         );
     } else {
         eprintln!(
-            "⚠ rate limit 확인 실패, 기본값으로 진행합니다. (ITPM: {} | OTPM: {} | RPM: {})",
-            limits.input_tokens_per_minute,
-            limits.output_tokens_per_minute,
-            limits.requests_per_minute,
+            "{}",
+            crate::messages::status::rate_limit_fallback(
+                limits.input_tokens_per_minute,
+                limits.output_tokens_per_minute,
+                limits.requests_per_minute,
+            )
         );
     }
 
@@ -110,34 +114,44 @@ pub async fn analyze_entries(
     // 4. Display: 계획 출력
     if plan.is_single_shot {
         eprintln!(
-            "✓ 전체 로그를 한 번에 분석합니다 (추정 {}토큰)",
-            plan.total_estimated_tokens
+            "{}",
+            crate::messages::status::plan_single_shot(plan.total_estimated_tokens)
         );
     } else {
         eprintln!(
-            "✓ 세션 {}개를 순차 분석합니다 (총 {} 토큰 추정)",
-            plan.steps.len(),
-            plan.total_estimated_tokens
+            "{}",
+            crate::messages::status::plan_multi_step(plan.steps.len(), plan.total_estimated_tokens)
         );
         if verbose {
             for step in &plan.steps {
-                let strategy_desc = match &step.strategy {
-                    StepStrategy::Direct => "직접 분석".to_string(),
+                match &step.strategy {
+                    StepStrategy::Direct => {
+                        eprintln!(
+                            "{}",
+                            crate::messages::status::plan_step_direct(
+                                &step.session_id,
+                                step.estimated_tokens,
+                            )
+                        );
+                    }
                     StepStrategy::Summarize { chunks } => {
-                        format!("요약 후 분석 ({chunks} 청크)")
+                        eprintln!(
+                            "{}",
+                            crate::messages::status::plan_step_summarize(
+                                &step.session_id,
+                                step.estimated_tokens,
+                                *chunks,
+                            )
+                        );
                     }
                 };
-                eprintln!(
-                    "  • {}: {} 토큰 → {}",
-                    step.session_id, step.estimated_tokens, strategy_desc
-                );
             }
         }
     }
 
     // 5. Execute — 모든 eprintln 출력이 끝난 후 스피너를 시작합니다.
     if plan.is_single_shot {
-        let sp = start_spinner("인사이트 분석 중...".into());
+        let sp = start_spinner(crate::messages::status::ANALYZING_INSIGHT.into());
         let prompt_text = prompt::build_prompt(entries)?;
         let (final_prompt, redact_result) = if redactor_enabled {
             crate::redactor::redact_text(&prompt_text)
@@ -226,9 +240,9 @@ async fn execute_plan(
         // Direct 스텝은 외부 스피너, Summarize 스텝은 내부에 자체 스피너가 있으므로 생략
         let use_spinner = step.strategy == StepStrategy::Direct;
         let sp = if use_spinner {
-            Some(start_spinner(format!(
-                "[{}/{}] {} 분석 중...", i + 1, total_steps, step.session_id
-            )))
+            Some(start_spinner(
+                crate::messages::status::step_analyzing(i + 1, total_steps, &step.session_id)
+            ))
         } else {
             None
         };
@@ -256,7 +270,7 @@ async fn execute_plan(
         match result {
             Ok((analysis, redact)) => {
                 if let Some(h) = sp { stop_spinner(h); }
-                eprintln!("✓ [{}/{}] 완료", i + 1, total_steps);
+                eprintln!("{}", crate::messages::status::step_done(i + 1, total_steps));
                 results.push(analysis);
                 total_redact.merge(redact);
             }
@@ -268,9 +282,9 @@ async fn execute_plan(
                     countdown_sleep(60).await;
 
                     let retry_sp = if use_spinner {
-                        Some(start_spinner(format!(
-                            "[{}/{}] {} 재시도 중...", i + 1, total_steps, step.session_id
-                        )))
+                        Some(start_spinner(
+                            crate::messages::status::step_retrying(i + 1, total_steps, &step.session_id)
+                        ))
                     } else {
                         None
                     };
@@ -301,24 +315,24 @@ async fn execute_plan(
                     match retry {
                         Ok((analysis, redact)) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
-                            eprintln!("✓ [{}/{}] 재시도 성공", i + 1, total_steps);
+                            eprintln!("{}", crate::messages::status::step_retry_success(i + 1, total_steps));
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!(
-                                "⚠ [{}/{}] {} 스킵 (재시도 실패): {}",
-                                i + 1, total_steps, step.session_id, retry_err
+                                "{}",
+                                crate::messages::status::step_skip_retry(i + 1, total_steps, &step.session_id, &retry_err)
                             );
                         }
                     }
-                } else if err_msg.contains("JSON 파싱 실패") {
-                    // JSON 파싱 실패: LLM 응답이 비결정적이므로 대기 없이 1회 재시도
+                } else if err_msg.contains(crate::messages::error::JSON_PARSE_FAILED_MARKER) {
+                    // JSON parse failure: LLM responses are non-deterministic, retry once without waiting
                     let retry_sp = if use_spinner {
-                        Some(start_spinner(format!(
-                            "[{}/{}] {} 재분석 중...", i + 1, total_steps, step.session_id
-                        )))
+                        Some(start_spinner(
+                            crate::messages::status::step_reanalyzing(i + 1, total_steps, &step.session_id)
+                        ))
                     } else {
                         None
                     };
@@ -342,22 +356,22 @@ async fn execute_plan(
                     match retry {
                         Ok((analysis, redact)) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
-                            eprintln!("✓ [{}/{}] 재분석 성공", i + 1, total_steps);
+                            eprintln!("{}", crate::messages::status::step_reanalysis_success(i + 1, total_steps));
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!(
-                                "⚠ [{}/{}] {} 스킵 (재분석 실패): {}",
-                                i + 1, total_steps, step.session_id, retry_err
+                                "{}",
+                                crate::messages::status::step_skip_reanalysis(i + 1, total_steps, &step.session_id, &retry_err)
                             );
                         }
                     }
                 } else {
                     eprintln!(
-                        "⚠ [{}/{}] {} 스킵: {}",
-                        i + 1, total_steps, step.session_id, err_msg
+                        "{}",
+                        crate::messages::status::step_skip(i + 1, total_steps, &step.session_id, &err_msg)
                     );
                 }
             }
@@ -374,7 +388,7 @@ async fn execute_plan(
     }
 
     if results.is_empty() {
-        return Err("모든 세션의 분석에 실패했습니다.".into());
+        return Err(crate::messages::error::ALL_SESSIONS_FAILED.into());
     }
 
     Ok((insight::merge_results(results), total_redact))
