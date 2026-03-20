@@ -14,9 +14,9 @@ rwd is transitioning from a Rust learning project to a production CLI tool for i
 |----------|-------|--------|
 | Learning comments | ~800 lines | **Delete** |
 | Design intent comments | ~400 lines | Translate to English |
-| CLI messages | ~75 | English, centralized in `src/messages.rs` |
+| CLI messages | ~100 | English, centralized in `src/messages.rs` (sub-grouped) |
 | LLM prompts | 3 (SYSTEM, SUMMARY, SLACK) | Externalize to `prompts/*.md`, EN/KO pairs |
-| Test function names | ~40 | Rename to English |
+| Test function names | ~56 | Rename to English |
 | Documentation | 19 .md files | Translate to English |
 | LEARNING_GUIDE.md | 1 | **Delete** |
 | README.md | 1 | Rewrite in English |
@@ -33,15 +33,32 @@ All user-facing strings are centralized as constants in a single module. No i18n
 
 ```rust
 // src/messages.rs
-pub const ERR_NO_CONFIG: &str = "No config found. Run `rwd init` first.";
-pub const ANALYZING: &str = "Analyzing insights via {} API...";
-pub const REWIND_DONE: &str = "Today's daily rewind is ready!";
-// ... all ~75 messages
+
+/// Sub-grouped by domain for readability (~100 constants total).
+pub mod init {
+    pub const SELECT_PROVIDER: &str = "LLM provider (anthropic/openai) [default: anthropic]: ";
+    pub const SELECT_LANG: &str = "Language (en/ko) [default: en]: ";
+    // ...
+}
+
+pub mod error {
+    pub const NO_CONFIG: &str = "No config found. Run `rwd init` first.";
+    pub const UNSUPPORTED_PROVIDER: &str = "Unsupported provider: '{}'";
+    // ...
+}
+
+pub mod status {
+    pub const ANALYZING: &str = "Analyzing insights via {} API...";
+    pub const REWIND_DONE: &str = "Today's daily rewind is ready!";
+    // ...
+}
 ```
 
-Logic code references these via `messages::ERR_NO_CONFIG`.
+Logic code references these via `messages::error::NO_CONFIG`.
 
-**Rationale:** A full i18n framework (rust-i18n, fluent) is overkill for ~75 messages with only 2 languages needed (and only for prompts). Centralizing constants achieves the same structural benefit with zero dependencies.
+**Format placeholder convention:** Constants containing `{}` are used with `format!()` at call sites (e.g., `format!(messages::status::ANALYZING, provider_name)`). No wrapper functions — direct `format!()` keeps it simple.
+
+**Rationale:** A full i18n framework (rust-i18n, fluent) is overkill for ~100 messages with only 2 languages needed (and only for prompts). Centralizing constants with sub-grouping achieves the same structural benefit with zero dependencies.
 
 ### 2. Prompt Externalization (`prompts/*.md`)
 
@@ -60,14 +77,16 @@ prompts/
 ```rust
 const SYSTEM_PROMPT_EN: &str = include_str!("../../prompts/system_en.md");
 const SYSTEM_PROMPT_KO: &str = include_str!("../../prompts/system_ko.md");
+// ... same pattern for SUMMARY_PROMPT and SLACK_PROMPT
 
-fn get_system_prompt(lang: &str) -> &'static str {
-    match lang {
-        "ko" => SYSTEM_PROMPT_KO,
-        _ => SYSTEM_PROMPT_EN,
-    }
+fn get_prompt(base: &str, lang: &Lang) -> &'static str {
+    // Selects the appropriate prompt variant by language.
+    // Called before each API method — the resolved prompt is passed
+    // as a parameter to `call_api_with_max_tokens(system_prompt, ...)`.
 }
 ```
+
+**Integration with API call chain:** The existing `call_api_with_max_tokens` already accepts a `system_prompt: &str` parameter. The `lang` value is resolved to a prompt string *before* calling API methods. `call_api`, `call_summary_api`, and `call_slack_api` each resolve their prompt via `get_prompt()` and pass it through. No signature changes needed on the underlying HTTP call methods.
 
 **Rationale:**
 - Single binary — no runtime file loading, no "file not found" errors
@@ -80,15 +99,23 @@ fn get_system_prompt(lang: &str) -> &'static str {
 #### Config struct
 
 ```rust
+/// Supported languages for LLM output.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Lang {
+    En,
+    Ko,
+}
+
 pub struct Config {
     pub llm: LlmConfig,
     pub output: OutputConfig,
     pub redactor: Option<RedactorConfig>,
-    pub lang: Option<String>,  // None = migration needed
+    pub lang: Option<Lang>,  // None = migration needed
 }
 ```
 
-`Option<String>` rather than `String` with `#[serde(default)]` — when `None`, the CLI prompts the user to choose before proceeding. This avoids surprising existing Korean users with sudden English output.
+`Option<Lang>` enum provides compile-time safety — no invalid values like `"jp"` can slip in. `Option` (not `#[serde(default)]`) is intentional: when `None`, the CLI prompts the user to choose before proceeding. `Option<T>` fields in serde default to `None` when the key is absent, so existing config files without `lang` will parse correctly without any annotation. This avoids surprising existing Korean users with sudden English output.
 
 #### Priority
 
@@ -148,7 +175,7 @@ Rename from Korean `test_동작_조건_기대결과` to English `test_behavior_c
 | docs/CONVENTIONS.md | Translate |
 | docs/MILESTONES.md | Translate (remove learning points, keep as milestone record) |
 | docs/LEARNING_GUIDE.md | **Delete** |
-| docs/superpowers/specs/*.md (8) | Translate |
+| docs/superpowers/specs/*.md (8 existing) | Translate (this spec excluded — already English) |
 | docs/superpowers/plans/*.md (8) | Translate |
 
 ### 8. CLAUDE.md Split
