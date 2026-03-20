@@ -157,7 +157,7 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_response_til_필드_포함시_파싱() {
+    fn test_parse_response_til_field_present() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"title":"serde tag 한계","detail":"중첩 JSON에서 안 먹힌다"}]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].til.len(), 1);
@@ -165,7 +165,7 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_results_여러_결과_병합() {
+    fn test_merge_results_multiple() {
         let r1 = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "s1".to_string(),
@@ -193,13 +193,13 @@ mod tests {
     }
 
     #[test]
-    fn test_merge_results_빈_벡터_빈_결과() {
+    fn test_merge_results_empty_vec_empty_result() {
         let merged = merge_results(vec![]);
         assert!(merged.sessions.is_empty());
     }
 
     #[test]
-    fn test_parse_response_til_필드_없어도_기본값_빈배열() {
+    fn test_parse_response_til_defaults_to_empty() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert!(result.sessions[0].til.is_empty());
@@ -208,7 +208,7 @@ mod tests {
     // --- LLM response field-missing tolerance tests ---
 
     #[test]
-    fn test_til_title_누락시_파싱_성공() {
+    fn test_til_missing_title_parses_ok() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"detail":"이유 설명"}]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].til.len(), 1);
@@ -217,14 +217,14 @@ mod tests {
     }
 
     #[test]
-    fn test_til_detail_누락시_파싱_성공() {
+    fn test_til_missing_detail_parses_ok() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[],"til":[{"title":"배운 점"}]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].til[0].detail, "");
     }
 
     #[test]
-    fn test_decision_필드_누락시_파싱_성공() {
+    fn test_decision_missing_field_parses_ok() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[{"what":"serde 선택"}],"curiosities":[],"corrections":[],"til":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].decisions[0].what, "serde 선택");
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn test_correction_필드_누락시_파싱_성공() {
+    fn test_correction_missing_field_parses_ok() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[],"corrections":[{"model_said":"잘못된 설명"}],"til":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].corrections[0].model_said, "잘못된 설명");
@@ -242,7 +242,7 @@ mod tests {
     // --- LLM response type-mismatch tolerance tests (map -> string defense) ---
 
     #[test]
-    fn test_curiosities_객체_배열이면_stringify() {
+    fn test_curiosities_object_array_stringify() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[],"curiosities":[{"question":"Xcode 호환성","context":"빌드 실패"}],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert_eq!(result.sessions[0].curiosities.len(), 1);
@@ -250,14 +250,14 @@ mod tests {
     }
 
     #[test]
-    fn test_work_summary_객체이면_stringify() {
+    fn test_work_summary_object_stringify() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":{"main":"요약","detail":"상세"},"decisions":[],"curiosities":[],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert!(result.sessions[0].work_summary.contains("요약"));
     }
 
     #[test]
-    fn test_decision_why_객체이면_stringify() {
+    fn test_decision_why_object_stringify() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[{"what":"선택","why":{"reason":"이유","context":"맥락"}}],"curiosities":[],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert!(result.sessions[0].decisions[0].why.contains("이유"));

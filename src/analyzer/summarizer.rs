@@ -132,14 +132,14 @@ mod tests {
     }
 
     #[test]
-    fn test_split_into_chunks_빈_메시지() {
+    fn test_split_into_chunks_empty_messages() {
         let messages: Vec<(String, String)> = vec![];
         let chunks = split_into_chunks(&messages, 30_000);
         assert!(chunks.is_empty());
     }
 
     #[test]
-    fn test_calculate_wait_itpm_기반() {
+    fn test_calculate_wait_itpm_based() {
         let limits = RateLimits {
             input_tokens_per_minute: 30_000,
             output_tokens_per_minute: 8_000,
@@ -150,7 +150,7 @@ mod tests {
     }
 
     #[test]
-    fn test_calculate_wait_rpm_기반() {
+    fn test_calculate_wait_rpm_based() {
         let limits = RateLimits {
             input_tokens_per_minute: 1_000_000,
             output_tokens_per_minute: 200_000,

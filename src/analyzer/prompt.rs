@@ -344,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_ids_중복_제거_순서_유지() {
+    fn test_extract_session_ids_dedup_preserves_order() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
                 r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"첫번째"}}"#,
@@ -361,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_ids_빈_엔트리_빈_결과() {
+    fn test_extract_session_ids_empty_entries_empty_result() {
         let entries: Vec<LogEntry> = vec![];
         let ids = extract_session_ids(&entries);
         assert!(ids.is_empty());
@@ -376,22 +376,22 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_tokens_한국어() {
+    fn test_estimate_tokens_korean() {
         assert_eq!(super::estimate_tokens("안녕하세요"), 2);
     }
 
     #[test]
-    fn test_estimate_tokens_영어() {
+    fn test_estimate_tokens_english() {
         assert_eq!(super::estimate_tokens("hello world"), 5);
     }
 
     #[test]
-    fn test_estimate_tokens_빈문자열() {
+    fn test_estimate_tokens_empty_string() {
         assert_eq!(super::estimate_tokens(""), 0);
     }
 
     #[test]
-    fn test_estimate_sessions_세션별_추정() {
+    fn test_estimate_sessions_per_session() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
                 r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"안녕하세요 반갑습니다"}}"#,
