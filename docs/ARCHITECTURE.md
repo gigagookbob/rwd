@@ -3,7 +3,9 @@
 ## 핵심 흐름
 
 ```
-CLI 진입 → 로그 파일 탐색/수집 → JSONL 파싱 & 구조화 → LLM API 호출 → Markdown 생성 → Obsidian Vault 저장
+rwd today:    CLI 진입 → 로그 파일 탐색/수집 → JSONL 파싱 & 구조화 → LLM API 호출 → Markdown 생성 → Obsidian Vault 저장
+rwd summary:  CLI 진입 → 캐시 로드 → work_summary 수집 → LLM API (SUMMARY_PROMPT) → Obsidian 저장 + 클립보드 복사
+rwd slack:    CLI 진입 → 캐시 로드 → work_summary 수집 → LLM API (SLACK_PROMPT) → 클립보드 복사
 ```
 
 ## 추출 대상 인사이트
