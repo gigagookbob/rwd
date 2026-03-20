@@ -90,21 +90,21 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_update_check_cache_직렬화_역직렬화_동일_데이터_반환() {
+    fn test_update_check_cache_serialize_deserialize_roundtrip() {
         let cache = UpdateCheckCache {
             checked_at: chrono::Utc::now(),
             latest_version: "0.6.0".to_string(),
         };
-        let json = serde_json::to_string_pretty(&cache).expect("직렬화 성공");
-        let loaded: UpdateCheckCache = serde_json::from_str(&json).expect("역직렬화 성공");
+        let json = serde_json::to_string_pretty(&cache).expect("serialize");
+        let loaded: UpdateCheckCache = serde_json::from_str(&json).expect("deserialize");
         assert_eq!(loaded.latest_version, "0.6.0");
     }
 
     #[test]
-    fn test_update_check_save_후_load_동일_데이터_반환() {
+    fn test_update_check_save_then_load_roundtrip() {
         let temp_dir = std::env::temp_dir().join("rwd_test_update_check");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+        std::fs::create_dir_all(&temp_dir).expect("create dir");
         let path = temp_dir.join("update-check.json");
 
         let cache = UpdateCheckCache {
@@ -112,7 +112,7 @@ mod tests {
             latest_version: "0.7.0".to_string(),
         };
 
-        save_update_check_to(&cache, &path).expect("저장 성공");
+        save_update_check_to(&cache, &path).expect("save");
         let loaded = load_update_check_from(&path);
         assert!(loaded.is_some());
         assert_eq!(loaded.unwrap().latest_version, "0.7.0");
@@ -121,7 +121,7 @@ mod tests {
     }
 
     #[test]
-    fn test_update_check_load_파일없으면_none_반환() {
+    fn test_update_check_load_returns_none_when_file_missing() {
         let path = std::env::temp_dir().join("rwd_test_nonexistent_update_check.json");
         let _ = std::fs::remove_file(&path);
         let loaded = load_update_check_from(&path);

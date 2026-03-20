@@ -133,7 +133,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_단일세션_제목과_요약_포함() {
+    fn test_render_markdown_single_session_title_and_summary() {
         let analysis = make_test_analysis();
         let md = render_markdown(&analysis, test_date());
 
@@ -143,7 +143,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_decisions_포함시_의사결정섹션_생성() {
+    fn test_render_markdown_decisions_section_when_present() {
         let analysis = make_test_analysis();
         let md = render_markdown(&analysis, test_date());
 
@@ -152,7 +152,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_빈_decisions일때_의사결정섹션_미생성() {
+    fn test_render_markdown_no_decisions_section_when_empty() {
         let analysis = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "s1".to_string(),
@@ -169,7 +169,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_combined_markdown_두소스_섹션_분리() {
+    fn test_render_combined_markdown_two_sources_separate_sections() {
         let claude = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "c1".to_string(),
@@ -201,7 +201,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_combined_markdown_단일소스_정상동작() {
+    fn test_render_combined_markdown_single_source() {
         let claude = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "c1".to_string(),
@@ -221,7 +221,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_til_제목_설명_세션id_포함() {
+    fn test_render_markdown_til_includes_title_desc_session_id() {
         let analysis = make_test_analysis();
         let md = render_markdown(&analysis, test_date());
 
@@ -232,7 +232,7 @@ mod tests {
     }
 
     #[test]
-    fn test_render_markdown_til_비어있으면_섹션_미생성() {
+    fn test_render_markdown_no_til_section_when_empty() {
         let analysis = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "s1".to_string(),

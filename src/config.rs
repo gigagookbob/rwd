@@ -492,16 +492,16 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_path_rwd_디렉토리_포함() {
-        let path = config_path().expect("경로 생성 성공");
+    fn test_config_path_includes_rwd_dir() {
+        let path = config_path().expect("path creation");
         assert!(path.ends_with("rwd/config.toml"));
     }
 
     #[test]
-    fn test_save_and_load_config_왕복_확인() {
+    fn test_save_and_load_config_roundtrip() {
         let temp_dir = std::env::temp_dir().join("rwd_test_config");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+        std::fs::create_dir_all(&temp_dir).expect("create dir");
         let path = temp_dir.join("config.toml");
 
         let config = Config {
@@ -515,8 +515,8 @@ mod tests {
             redactor: None,
         };
 
-        save_config(&config, &path).expect("저장 성공");
-        let loaded = load_config(&path).expect("로드 성공");
+        save_config(&config, &path).expect("save");
+        let loaded = load_config(&path).expect("load");
 
         assert_eq!(loaded.llm.provider, "anthropic");
         assert_eq!(loaded.llm.api_key, "sk-test-key");
@@ -526,12 +526,12 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_obsidian_vault_obsidian폴더_있으면_경로반환() {
+    fn test_detect_vault_returns_path_when_obsidian_dir_exists() {
         let temp_dir = std::env::temp_dir().join("rwd_test_vault_detect");
         let _ = std::fs::remove_dir_all(&temp_dir);
         let vault_dir = temp_dir.join("TestVault");
         let obsidian_marker = vault_dir.join(".obsidian");
-        std::fs::create_dir_all(&obsidian_marker).expect("디렉토리 생성");
+        std::fs::create_dir_all(&obsidian_marker).expect("create dir");
 
         let result = detect_vault_in_dir(&temp_dir);
         assert!(result.is_some());
@@ -541,10 +541,10 @@ mod tests {
     }
 
     #[test]
-    fn test_detect_obsidian_vault_없으면_None() {
+    fn test_detect_vault_returns_none_when_missing() {
         let temp_dir = std::env::temp_dir().join("rwd_test_no_vault");
         let _ = std::fs::remove_dir_all(&temp_dir);
-        std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+        std::fs::create_dir_all(&temp_dir).expect("create dir");
 
         let result = detect_vault_in_dir(&temp_dir);
         assert!(result.is_none());
@@ -553,7 +553,7 @@ mod tests {
     }
 
     #[test]
-    fn test_config_redactor_없으면_none() {
+    fn test_config_redactor_none_when_missing() {
         let toml_str = r#"
 [llm]
 provider = "anthropic"
@@ -562,12 +562,12 @@ api_key = "sk-test"
 [output]
 path = "/tmp/vault"
 "#;
-        let config: Config = toml::from_str(toml_str).expect("파싱 성공");
+        let config: Config = toml::from_str(toml_str).expect("parse");
         assert!(config.redactor.is_none());
     }
 
     #[test]
-    fn test_config_redactor_있으면_파싱() {
+    fn test_config_redactor_parses_when_present() {
         let toml_str = r#"
 [llm]
 provider = "anthropic"
@@ -579,7 +579,7 @@ path = "/tmp/vault"
 [redactor]
 enabled = false
 "#;
-        let config: Config = toml::from_str(toml_str).expect("파싱 성공");
+        let config: Config = toml::from_str(toml_str).expect("parse");
         assert_eq!(config.redactor.unwrap().enabled, false);
     }
 }

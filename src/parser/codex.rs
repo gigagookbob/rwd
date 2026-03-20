@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn test_work_summary_객체이면_stringify() {
+    fn test_work_summary_object_stringify() {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":{"main":"요약","detail":"상세"},"decisions":[],"curiosities":[],"corrections":[]}]}"#;
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
         let ws = &parsed["sessions"][0]["work_summary"];

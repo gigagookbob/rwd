@@ -47,7 +47,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_save_to_vault_파일생성_확인() {
+    fn test_save_to_vault_creates_file() {
         let temp_dir = std::env::temp_dir().join("rwd_test_output");
         std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
 
