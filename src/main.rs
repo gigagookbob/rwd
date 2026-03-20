@@ -4,6 +4,7 @@ mod analyzer;
 mod cache;
 mod cli;
 mod config;
+mod messages;
 mod output;
 mod parser;
 mod redactor;
