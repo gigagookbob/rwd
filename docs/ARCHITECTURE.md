@@ -1,89 +1,94 @@
 # Architecture — rwd
 
-## 핵심 흐름
+## Core Flow
 
 ```
-rwd today:    CLI 진입 → 로그 파일 탐색/수집 → JSONL 파싱 & 구조화 → LLM API 호출 → Markdown 생성 → Obsidian Vault 저장
-rwd summary:  CLI 진입 → 캐시 로드 → work_summary 수집 → LLM API (SUMMARY_PROMPT) → Obsidian 저장 + 클립보드 복사
-rwd slack:    CLI 진입 → 캐시 로드 → work_summary 수집 → LLM API (SLACK_PROMPT) → 클립보드 복사
+rwd today:    CLI entry → log file discovery → JSONL parsing & structuring → LLM API call → Markdown generation → Obsidian Vault save
+rwd summary:  CLI entry → cache load → collect work_summaries → LLM API (SUMMARY_PROMPT) → Obsidian save + clipboard copy
+rwd slack:    CLI entry → cache load → collect work_summaries → LLM API (SLACK_PROMPT) → clipboard copy
 ```
 
-## 추출 대상 인사이트
+## Extracted Insights
 
-- 사용자의 선택 분기 (A vs B 중 왜 A를 선택했는가)
-- 사용자가 궁금했던 것, 헷갈렸던 것
-- 모델이 틀리거나 몰라서 사용자가 수정한 것
-- 세션 간 맥락 전환 (어떤 프로젝트에서 어떤 작업을 했는가)
+- User's decision branches (why A over B)
+- Things the user was curious or confused about
+- Model errors corrected by the user
+- Context switches between sessions (which project, which task)
 
-## 2단계 처리 전략
+## Two-Stage Processing
 
-1. **파싱 단계 (규칙 기반)**: 로그 파일을 구조화된 데이터로 변환
-   - 누가 말했는지 (user / assistant)
-   - 어떤 도구를 호출했는지
-   - 에러 발생 여부
-   - 되돌리기/수정 패턴
+1. **Parsing stage (rule-based)**: Transforms log files into structured data
+   - Who said what (user / assistant)
+   - Tool invocations
+   - Error occurrences
+   - Undo/correction patterns
 
-2. **분석 단계 (LLM 기반)**: 구조화된 데이터를 LLM에 전달하여 인사이트 추출
-   - 원본 로그가 아닌 구조화된 데이터를 전달하여 정보 손실 최소화
+2. **Analysis stage (LLM-based)**: Sends structured data to LLM for insight extraction
+   - Uses structured data (not raw logs) to minimize information loss
 
-## 입력 소스
+## Input Sources
 
 ### Claude Code
 
-- 로그 위치: `~/.claude/projects/` 하위 JSONL 파일
-- 형식: 각 줄이 독립된 JSON 객체
+- Log location: `~/.claude/projects/` subdirectory JSONL files
+- Format: Each line is an independent JSON object
 
 ### Codex
 
-- 로그 위치: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-- 형식: 각 줄이 `{"timestamp", "type", "payload"}` 구조의 JSON 객체
-- 엔트리 타입: session_meta, response_item, event_msg, turn_context
-- 파서: 2단계 변환 (CodexRawEntry → CodexEntry)
+- Log location: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+- Format: Each line is `{"timestamp", "type", "payload"}` JSON object
+- Entry types: session_meta, response_item, event_msg, turn_context
+- Parser: Two-stage conversion (CodexRawEntry → CodexEntry)
 
-## 프로젝트 구조
+## Project Structure
 
 ```
 rwd/
 ├── Cargo.toml
-├── AGENTS.md
+├── CLAUDE.md
+├── prompts/             # LLM prompt templates (EN/KO)
 ├── docs/
-│   ├── ARCHITECTURE.md    # 이 문서
+│   ├── ARCHITECTURE.md  # This document
 │   ├── MILESTONES.md
-│   ├── CONVENTIONS.md
-│   └── LEARNING_GUIDE.md
+│   └── CONVENTIONS.md
 ├── src/
-│   ├── main.rs            # CLI 진입점
-│   ├── cli.rs             # clap 기반 CLI 정의
-│   ├── parser/            # 로그 파싱 모듈
+│   ├── main.rs          # CLI entry point
+│   ├── cli.rs           # clap-based CLI definitions
+│   ├── messages.rs      # Centralized user-facing strings
+│   ├── config.rs        # Config file management
+│   ├── parser/          # Log parsing modules
 │   │   ├── mod.rs
-│   │   ├── claude.rs      # Claude Code 로그 파서
-│   │   └── codex.rs       # Codex 로그 파서
-│   ├── analyzer/          # 구조화된 데이터 → LLM 인사이트 추출
-│   │   ├── mod.rs         # 오케스트레이터
-│   │   ├── anthropic.rs   # Anthropic Claude API 클라이언트
-│   │   ├── insight.rs     # 응답 파싱
-│   │   ├── openai.rs      # OpenAI API 클라이언트
-│   │   ├── planner.rs     # 분석 계획 생성
-│   │   ├── prompt.rs      # 프롬프트 생성
-│   │   ├── provider.rs    # LlmProvider enum, 프로바이더 선택
-│   │   └── summarizer.rs  # 분석 결과 요약
-│   ├── output/            # Markdown 생성 및 파일 저장
-│   │   └── mod.rs
-│   ├── redactor/          # 민감 정보 마스킹
-│   │   ├── mod.rs         # 공개 API: redact_text(), RedactResult
-│   │   └── patterns.rs    # 내장 패턴 정의 (LazyLock 초기화)
-│   └── config.rs          # 설정 (경로, API 키 등)
+│   │   ├── claude.rs    # Claude Code log parser
+│   │   └── codex.rs     # Codex log parser
+│   ├── analyzer/        # Structured data → LLM insight extraction
+│   │   ├── mod.rs       # Orchestrator
+│   │   ├── anthropic.rs # Anthropic Claude API client
+│   │   ├── insight.rs   # Response parsing
+│   │   ├── openai.rs    # OpenAI API client
+│   │   ├── planner.rs   # Execution plan generation
+│   │   ├── prompt.rs    # Prompt construction
+│   │   ├── provider.rs  # LlmProvider enum, provider selection
+│   │   └── summarizer.rs# Chunk summarization
+│   ├── output/          # Markdown generation and file saving
+│   │   ├── mod.rs
+│   │   └── markdown.rs
+│   ├── redactor/        # Sensitive data masking
+│   │   ├── mod.rs       # Public API: redact_text(), RedactResult
+│   │   └── patterns.rs  # Built-in patterns (LazyLock initialized)
+│   ├── cache.rs         # Analysis result caching
+│   └── update.rs        # Self-update via GitHub Releases
 └── tests/
 ```
 
 ## Core Dependencies
 
-| 크레이트    | 용도               |
-| ----------- | ------------------ |
-| `clap`      | CLI 파싱           |
-| `regex`     | 정규표현식 매칭    |
-| `serde`     | 직렬화/역직렬화    |
-| `serde_json`| JSON/JSONL 파싱    |
-| `reqwest`   | HTTP 클라이언트    |
-| `tokio`     | Async 런타임       |
-| `walkdir`   | 파일 시스템 탐색   |
+| Crate        | Purpose              |
+| ------------ | -------------------- |
+| `clap`       | CLI parsing          |
+| `regex`      | Regex matching       |
+| `serde`      | Serialization        |
+| `serde_json` | JSON/JSONL parsing   |
+| `reqwest`    | HTTP client          |
+| `tokio`      | Async runtime        |
+| `chrono`     | Date/time handling   |
+| `dialoguer`  | Interactive prompts  |
