@@ -1,16 +1,16 @@
-# Design: rwd today ASCII 아트 출력
+# Design: rwd today ASCII Art Output
 
-## 목적
+## Purpose
 
-`rwd today` 실행 시 터미널 출력을 클래식 블록 ASCII 로고 + 유니코드 박스 테이블로 개선한다.
+Improve the terminal output of `rwd today` with a classic block ASCII logo + Unicode box-drawing table.
 
-## 설계
+## Design
 
-### 변경 파일
+### Changed File
 
-`src/main.rs` — 출력 포매팅 변경만. 로직 변경 없음.
+`src/main.rs` — output formatting changes only. No logic changes.
 
-### 로고 배너 (Cyan)
+### Logo Banner (Cyan)
 
 ```
   ██████  ██     ██ ██████
@@ -21,7 +21,7 @@
     rewind your day  v0.5.1
 ```
 
-### 정보 박스 (유니코드 박스 드로잉)
+### Info Box (Unicode Box Drawing)
 
 ```
   ┌──────────────────────────────────┐
@@ -29,34 +29,34 @@
   ├──────────────────────────────────┤
   │  Claude Code                     │
   │  08:51 ~ 09:51                   │
-  │  세션 8  in 63,832,010  out 122,882│
+  │  Sessions 8  in 63,832,010  out 122,882│
   ├──────────────────────────────────┤
   │  Codex                           │
   │  09:16 ~ 09:51                   │
-  │  세션 1                          │
+  │  Sessions 1                      │
   └──────────────────────────────────┘
 ```
 
-### 색상 (ANSI, 라이트/다크 양쪽 안전)
+### Colors (ANSI, safe for both light/dark themes)
 
-| 요소 | 색상 |
-|------|------|
-| 로고 | Cyan |
+| Element | Color |
+|---------|-------|
+| Logo | Cyan |
 | "Claude Code" | Bright Blue |
 | "Codex" | Yellow |
-| 박스 선 / 일반 텍스트 | 기본 (reset) |
-| 프로바이더 안내 | Magenta |
-| 버전/태그라인 | Dim (회색) |
+| Box lines / general text | Default (reset) |
+| Provider info | Magenta |
+| Version/tagline | Dim (gray) |
 
-### 변경하지 않는 것
+### What Stays Unchanged
 
-- 인사이트 출력 (`print_insights`) — 그대로
-- 캐시 안내 메시지 — 그대로
-- Scanning 줄 — 제거 (박스에 정보가 다 있음)
-- 비즈니스 로직 — 출력 포매팅만 변경
+- Insight output (`print_insights`) — unchanged
+- Cache status messages — unchanged
+- Scanning line — removed (the box already contains all the info)
+- Business logic — only output formatting changes
 
-### 구현 방식
+### Implementation Approach
 
-- ANSI escape 코드를 직접 사용 (`\x1b[36m` 등)
-- 외부 크레이트 추가 없음 — 색상 수가 적고 단순하여 직접 처리
-- 박스 너비는 고정 (내용 길이에 따라 동적으로 조절하지 않음)
+- Use ANSI escape codes directly (`\x1b[36m` etc.)
+- No additional crates — the color count is small and simple enough to handle directly
+- Box width is fixed (not dynamically adjusted based on content length)

@@ -1,25 +1,12 @@
-// OpenAI Chat Completions API 클라이언트.
-//
-// Anthropic과 같은 reqwest + serde 패턴을 사용하지만, 요청/응답 JSON 스키마가 다릅니다.
-// 주요 차이점:
-// - 인증: Authorization: Bearer <key> (Anthropic은 x-api-key 헤더)
-// - system prompt: messages 배열의 {"role": "system"} 메시지 (Anthropic은 top-level system 필드)
-// - 응답: choices[0].message.content (Anthropic은 content[0].text)
+// OpenAI Chat Completions API client.
 
 use serde::{Deserialize, Serialize};
 use super::planner::RateLimits;
 
-// OpenAI Chat Completions 엔드포인트
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
-// 분석에 사용할 모델 (M5에서 설정 파일로 변경 예정)
 const MODEL: &str = "gpt-4o";
 
-// === API 요청/응답 타입 (이 모듈 내부에서만 사용) ===
-
-/// OpenAI Chat Completions 요청 본문.
-/// Anthropic의 ApiRequest와 비교하면:
-/// - system 필드가 없음 → system prompt를 messages 배열에 포함
-/// - messages 배열에 role: "system", "user" 등 여러 역할의 메시지를 넣음
+/// OpenAI Chat Completions request body.
 #[derive(Serialize)]
 struct ChatRequest {
     model: String,
@@ -27,41 +14,32 @@ struct ChatRequest {
     max_tokens: u32,
 }
 
-/// Chat 메시지 (role + content).
-/// Anthropic의 ApiMessage와 동일한 구조이지만, role에 "system"도 가능합니다.
+/// Chat message (role + content).
 #[derive(Serialize)]
 struct ChatMessage {
     role: String,
     content: String,
 }
 
-/// OpenAI Chat Completions 응답 본문.
-/// Anthropic은 content 배열을 사용하지만, OpenAI는 choices 배열을 사용합니다.
+/// OpenAI Chat Completions response body.
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
 }
 
-/// choices 배열의 각 항목.
-/// index, message, finish_reason을 포함하지만, 우리는 message.content만 사용합니다.
+/// A single choice from the choices array.
 #[derive(Deserialize)]
 struct Choice {
     message: ChoiceMessage,
 }
 
-/// choice 내부의 메시지.
-/// role은 항상 "assistant"이고, content에 LLM 응답 텍스트가 들어 있습니다.
+/// The message inside a choice (role is always "assistant").
 #[derive(Deserialize)]
 struct ChoiceMessage {
     content: String,
 }
 
-/// OpenAI Chat Completions API를 호출하여 원시 텍스트 응답을 반환합니다.
-///
-/// anthropic.rs의 call_anthropic_api()와 동일한 역할을 하지만:
-/// - Authorization: Bearer 헤더로 인증합니다 (Anthropic은 x-api-key)
-/// - system prompt를 messages 배열의 첫 번째 메시지로 전달합니다
-/// - 응답에서 choices[0].message.content를 추출합니다
+/// Calls the OpenAI Chat Completions API and returns the raw text response.
 pub async fn call_openai_api(
     api_key: &str,
     system_prompt: &str,
@@ -70,8 +48,6 @@ pub async fn call_openai_api(
 ) -> Result<String, super::AnalyzerError> {
     let client = reqwest::Client::new();
 
-    // OpenAI는 system prompt를 messages 배열에 {"role": "system"} 메시지로 전달합니다.
-    // Anthropic은 top-level system 필드를 사용하는 것과 대조적입니다.
     let request_body = ChatRequest {
         model: MODEL.to_string(),
         messages: vec![
@@ -87,8 +63,6 @@ pub async fn call_openai_api(
         max_tokens,
     };
 
-    // Authorization: Bearer 헤더 — OpenAI의 인증 방식입니다.
-    // format!()으로 문자열을 조합합니다 (Rust Book Ch.8.2 참조).
     let response = client
         .post(API_URL)
         .header("Authorization", format!("Bearer {api_key}"))
@@ -97,26 +71,23 @@ pub async fn call_openai_api(
         .send()
         .await?;
 
-    // anthropic.rs와 동일한 에러 처리 패턴
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::openai_api_request_failed(&status, &error_body).into());
     }
 
     let chat_response: ChatResponse = response.json().await?;
 
-    // choices 배열의 첫 번째 항목에서 content를 추출합니다.
-    // .first()는 슬라이스의 첫 번째 요소를 Option으로 반환합니다 (Rust Book Ch.8.1).
     let text = chat_response
         .choices
         .first()
-        .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
+        .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
 
     Ok(text.message.content.clone())
 }
 
-/// max_tokens를 지정할 수 있는 API 호출 변형.
+/// API call variant with explicit max_tokens.
 pub async fn call_openai_api_with_max_tokens(
     api_key: &str,
     system_prompt: &str,
@@ -149,17 +120,17 @@ pub async fn call_openai_api_with_max_tokens(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::openai_api_request_failed(&status, &error_body).into());
     }
     let chat_response: ChatResponse = response.json().await?;
     let text = chat_response
         .choices
         .first()
-        .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
+        .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
     Ok(text.message.content.clone())
 }
 
-/// OpenAI API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
+/// Sends a minimal request to probe rate limits from response headers.
 pub async fn probe_openai_rate_limits(api_key: &str) -> Option<RateLimits> {
     let client = reqwest::Client::new();
 
@@ -184,7 +155,7 @@ pub async fn probe_openai_rate_limits(api_key: &str) -> Option<RateLimits> {
     parse_openai_rate_headers(&response)
 }
 
-/// OpenAI 응답 헤더에서 rate limit 값을 추출한다.
+/// Extracts rate limit values from OpenAI response headers.
 fn parse_openai_rate_headers(response: &reqwest::Response) -> Option<RateLimits> {
     let headers = response.headers();
 
@@ -210,8 +181,7 @@ fn parse_openai_rate_headers(response: &reqwest::Response) -> Option<RateLimits>
 mod tests {
     use super::*;
 
-    /// OpenAI 응답 JSON을 올바르게 파싱하는지 테스트합니다.
-    /// 실제 API 호출 없이 응답 파싱 로직만 검증합니다.
+    /// Verifies response JSON parsing without making actual API calls.
     #[test]
     fn test_parse_openai_response() {
         let json = r#"{
@@ -241,7 +211,7 @@ mod tests {
         assert_eq!(response.choices[0].message.content, "{\"sessions\": []}");
     }
 
-    /// choices가 빈 배열인 경우 .first()가 None을 반환하는지 확인합니다.
+    /// Verifies .first() returns None for an empty choices array.
     #[test]
     fn test_empty_choices() {
         let json = r#"{"choices": []}"#;

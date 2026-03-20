@@ -1,19 +1,17 @@
-// 내장 민감 정보 탐지 패턴을 정의합니다.
-// LazyLock은 처음 접근 시 한 번만 초기화되는 지연 정적 변수입니다 (std::sync::LazyLock).
-// 정규식 컴파일은 비용이 크므로, 한 번만 수행하고 재사용합니다.
+// Built-in sensitive data detection patterns.
+// Each regex is compiled once via LazyLock and reused.
 
 use regex::Regex;
 use std::sync::LazyLock;
 
-/// 패턴 종류 — 향후 FixedPrefix를 Aho-Corasick으로 교체할 수 있습니다.
-/// 현재는 양쪽 모두 Regex로 동작하며, kind는 메타데이터 역할만 합니다.
+/// Pattern kind — metadata only, both currently use Regex.
 #[allow(dead_code)]
 pub enum PatternKind {
     FixedPrefix,
     Regex,
 }
 
-/// 하나의 마스킹 규칙을 나타냅니다.
+/// A single masking rule.
 pub struct RedactorRule {
     pub name: &'static str,
     #[allow(dead_code)]
@@ -21,11 +19,8 @@ pub struct RedactorRule {
     pub pattern: &'static Regex,
 }
 
-/// 내장 패턴 목록을 반환합니다.
-/// 각 패턴은 LazyLock으로 한 번만 컴파일됩니다.
+/// Returns the list of built-in redaction rules.
 pub fn builtin_rules() -> Vec<RedactorRule> {
-    // LazyLock<Regex>: 처음 접근 시 Regex::new()를 호출하여 컴파일합니다.
-    // expect()는 정규식 문법 에러(프로그래밍 에러)일 때 panic합니다 — 런타임 입력이 아니므로 허용됩니다.
     static API_KEY: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\bsk-[a-zA-Z0-9]{20,}\b").expect("API_KEY regex"));
     static AWS_KEY: LazyLock<Regex> =

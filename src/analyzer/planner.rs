@@ -1,10 +1,9 @@
-// Rate Limit 인식 실행 계획 모듈.
+// Rate-limit-aware execution planning module.
 //
-// API probe 결과(RateLimits)와 세션별 토큰 추정(SessionEstimate)을 기반으로
-// 실행 전략(ExecutionPlan)을 수립합니다.
+// Builds an ExecutionPlan from probed RateLimits and per-session token estimates.
 
-/// API rate limit 정보.
-/// probe 호출의 응답 헤더에서 추출하거나, 실패 시 default_generous()를 사용한다.
+/// API rate limit information.
+/// Extracted from probe response headers, or default_generous() on failure.
 #[derive(Debug, Clone)]
 pub struct RateLimits {
     pub input_tokens_per_minute: u64,
@@ -13,9 +12,8 @@ pub struct RateLimits {
 }
 
 impl RateLimits {
-    /// probe 실패 시 사용하는 관대한 기본값.
-    /// 대부분의 사용자가 single_shot으로 진행하게 되며,
-    /// 실제 제한에 걸리면 런타임 안전망이 처리한다.
+    /// Generous defaults used when probing fails.
+    /// Most users will proceed with single_shot; the runtime safety net handles actual limits.
     pub fn default_generous() -> Self {
         Self {
             input_tokens_per_minute: 1_000_000,
@@ -25,23 +23,23 @@ impl RateLimits {
     }
 }
 
-/// 세션별 토큰 추정 결과.
+/// Per-session token estimate.
 #[derive(Debug, Clone)]
 pub struct SessionEstimate {
     pub session_id: String,
     pub estimated_tokens: u64,
 }
 
-/// 개별 실행 스텝의 전략.
+/// Strategy for an individual execution step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepStrategy {
-    /// ITPM 이내 — 그대로 전송
+    /// Within ITPM -- send as-is.
     Direct,
-    /// ITPM 초과 — 청크 분할 후 요약
+    /// Exceeds ITPM -- split into chunks and summarize.
     Summarize { chunks: usize },
 }
 
-/// 실행 계획의 개별 스텝.
+/// A single step in the execution plan.
 #[derive(Debug, Clone)]
 pub struct ExecutionStep {
     pub session_id: String,
@@ -49,34 +47,33 @@ pub struct ExecutionStep {
     pub estimated_tokens: u64,
 }
 
-/// 전체 실행 계획.
-/// is_single_shot이면 기존처럼 한 번에 전송 (높은 tier에서 오버헤드 없음).
+/// Overall execution plan.
+/// When is_single_shot is true, all sessions are sent in one API call (no overhead for high-tier users).
 #[derive(Debug, Clone)]
 pub struct ExecutionPlan {
     pub rate_limits: RateLimits,
     pub steps: Vec<ExecutionStep>,
     pub total_estimated_tokens: u64,
     pub is_single_shot: bool,
-    /// API 호출 시 사용할 동적 max_tokens 값.
+    /// Dynamic max_tokens value for API calls.
     pub recommended_max_tokens: u64,
 }
 
-/// analyze_summary() 호출을 위해 예약하는 토큰 여유분.
+/// Token budget reserved for the analyze_summary() call.
 const SUMMARY_BUDGET_TOKENS: u64 = 5_000;
 
-/// 세션당 예상 출력 토큰.
-/// 16세션 분석 시 16384 토큰 초과 실측 → 세션당 ~1000+, 보수적 1500.
+/// Estimated output tokens per session (conservative: ~1500 based on real-world measurements).
 const OUTPUT_TOKENS_PER_SESSION: u64 = 1_500;
 
-/// 출력 여유 비율 (30%).
+/// Output margin ratio (30%).
 const OUTPUT_MARGIN: f64 = 1.3;
 
-/// rate limit과 세션별 추정치를 기반으로 실행 계획을 수립한다.
+/// Builds an execution plan from rate limits and per-session estimates.
 ///
-/// 전략 분기:
-/// - 전체 합계 + 여유분 ≤ ITPM AND 추정 출력 ≤ model_max_output → single_shot
-/// - 개별 세션 ≤ ITPM → Direct (세션별 순차)
-/// - 개별 세션 > ITPM → Summarize (청크 분할 후 요약)
+/// Strategy branches:
+/// - total + budget <= ITPM AND estimated output <= model_max_output -> single_shot
+/// - individual session <= ITPM -> Direct (sequential per-session)
+/// - individual session > ITPM -> Summarize (chunk and summarize)
 pub fn build_execution_plan(
     limits: &RateLimits,
     estimates: &[SessionEstimate],
@@ -86,11 +83,10 @@ pub fn build_execution_plan(
     let total: u64 = estimates.iter().map(|e| e.estimated_tokens).sum();
     let num_sessions = estimates.len() as u64;
 
-    // 출력 토큰 추정: 세션 수 × 세션당 예상 × 여유 비율
     let estimated_output = (num_sessions * OUTPUT_TOKENS_PER_SESSION) as f64 * OUTPUT_MARGIN;
     let recommended_max_tokens = (estimated_output as u64).min(model_max_output);
 
-    // single-shot 조건: 입력 AND 출력 모두 한도 이내
+    // Single-shot condition: both input AND output fit within limits.
     if total + SUMMARY_BUDGET_TOKENS <= itpm
         && (estimated_output as u64) <= model_max_output
     {
@@ -103,7 +99,7 @@ pub fn build_execution_plan(
         };
     }
 
-    // 세션별로 전략 결정
+    // Per-session strategy selection.
     let steps: Vec<ExecutionStep> = estimates
         .iter()
         .map(|est| {
@@ -233,7 +229,6 @@ mod tests {
 
     #[test]
     fn test_single_shot_blocked_by_output_limit() {
-        // 입력은 ITPM 이내지만 세션 22개 → 출력 추정 42900 > 32000
         let limits = RateLimits::default_generous();
         let estimates: Vec<SessionEstimate> = (0..22)
             .map(|i| SessionEstimate {
@@ -253,7 +248,6 @@ mod tests {
             SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
             SessionEstimate { session_id: "s2".into(), estimated_tokens: 30_000 },
         ];
-        // 2세션 × 1500 × 1.3 = 3900 < 32000 → single-shot
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(plan.is_single_shot);
     }
@@ -268,7 +262,6 @@ mod tests {
             })
             .collect();
         let plan = build_execution_plan(&limits, &estimates, 32_000);
-        // 10세션 × 1500 × 1.3 = 19500
         assert_eq!(plan.recommended_max_tokens, 19_500);
     }
 }

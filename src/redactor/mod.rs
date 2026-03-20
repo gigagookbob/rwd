@@ -1,19 +1,17 @@
-// redactor 모듈은 LLM API 전송 전 민감 정보를 탐지하고 마스킹하는 역할을 합니다.
-// analyzer 모듈에서 build_prompt() 결과에 적용하여, 외부 유출을 차단합니다.
+// Detects and masks sensitive data before sending to LLM APIs.
 
 pub mod patterns;
 
 use std::collections::BTreeMap;
 
-/// 마스킹 결과 요약.
-/// BTreeMap을 사용하여 타입명 알파벳순 정렬을 보장합니다 (HashMap은 순서 비보장).
+/// Masking result summary. BTreeMap ensures alphabetical ordering by type name.
 pub struct RedactResult {
     pub total_count: usize,
     pub by_type: BTreeMap<String, usize>,
 }
 
 impl RedactResult {
-    /// redactor 비활성 시 사용하는 빈 결과.
+    /// Empty result for when redactor is disabled.
     pub fn empty() -> Self {
         Self {
             total_count: 0,
@@ -21,8 +19,7 @@ impl RedactResult {
         }
     }
 
-    /// 여러 RedactResult를 합산합니다 (Claude + Codex 결과 병합).
-    /// entry() API는 키가 없으면 기본값을 삽입하고, 있으면 기존 값에 접근합니다 (Rust Book Ch.8).
+    /// Merges another result into this one (e.g., Claude + Codex).
     pub fn merge(&mut self, other: RedactResult) {
         self.total_count += other.total_count;
         for (key, count) in other.by_type {
@@ -30,7 +27,7 @@ impl RedactResult {
         }
     }
 
-    /// "API_KEY: 3, BEARER_TOKEN: 1" 형식의 요약 문자열을 생성합니다.
+    /// Formats summary like "API_KEY: 3, BEARER_TOKEN: 1".
     pub fn format_summary(&self) -> String {
         self.by_type
             .iter()
@@ -40,11 +37,8 @@ impl RedactResult {
     }
 }
 
-/// 텍스트에서 민감 정보를 탐지하고 [REDACTED:TYPE]으로 치환합니다.
-/// 패턴은 LazyLock으로 초기화되므로 이 함수는 실패하지 않습니다.
-///
-/// 주의: 규칙은 순서대로 적용됩니다. 앞선 규칙의 치환 결과가
-/// 뒤따르는 규칙에 매칭되지 않도록 패턴을 설계해야 합니다.
+/// Detects sensitive data in text and replaces with [REDACTED:TYPE].
+/// Rules are applied in order — earlier replacements must not match later patterns.
 pub fn redact_text(text: &str) -> (String, RedactResult) {
     let rules = patterns::builtin_rules();
     let mut result_text = text.to_string();
@@ -52,8 +46,6 @@ pub fn redact_text(text: &str) -> (String, RedactResult) {
     let mut total_count: usize = 0;
 
     for rule in rules {
-        // find_iter()로 매칭 횟수를 먼저 세고, 매칭이 있을 때만 치환합니다.
-        // replace_all()에 &str을 넘기면 캡처 기반 코드 경로를 타지 않아 더 효율적입니다.
         let count = rule.pattern.find_iter(&result_text).count();
         if count > 0 {
             let replacement = format!("[REDACTED:{}]", rule.name);
@@ -74,7 +66,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_api_key_마스킹() {
+    fn test_api_key_masking() {
         let input = "키는 sk-abcdefghijklmnopqrstuvwxyz1234 입니다";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:API_KEY]"));
@@ -84,7 +76,7 @@ mod tests {
     }
 
     #[test]
-    fn test_aws_key_마스킹() {
+    fn test_aws_key_masking() {
         let input = "AWS 키: AKIAIOSFODNN7EXAMPLE";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:AWS_KEY]"));
@@ -92,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn test_github_token_마스킹() {
+    fn test_github_token_masking() {
         let input = "ghp_ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmn";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:GITHUB_TOKEN]"));
@@ -100,7 +92,7 @@ mod tests {
     }
 
     #[test]
-    fn test_slack_token_마스킹() {
+    fn test_slack_token_masking() {
         let input = "토큰: xoxb-123456-abcdef";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:SLACK_TOKEN]"));
@@ -108,7 +100,7 @@ mod tests {
     }
 
     #[test]
-    fn test_bearer_token_마스킹() {
+    fn test_bearer_token_masking() {
         let input = "Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.test";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:BEARER_TOKEN]"));
@@ -116,7 +108,7 @@ mod tests {
     }
 
     #[test]
-    fn test_env_secret_따옴표감싼_값만_매칭() {
+    fn test_env_secret_matches_quoted_values_only() {
         let input = r#"password = "my_secret_pass""#;
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:ENV_SECRET]"));
@@ -124,14 +116,14 @@ mod tests {
     }
 
     #[test]
-    fn test_env_secret_따옴표없으면_미매칭() {
+    fn test_env_secret_no_match_without_quotes() {
         let input = "password = some_value";
         let (_, result) = redact_text(input);
         assert_eq!(result.total_count, 0);
     }
 
     #[test]
-    fn test_private_ip_마스킹() {
+    fn test_private_ip_masking() {
         let input = "서버 주소: 192.168.1.100";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:PRIVATE_IP]"));
@@ -139,7 +131,7 @@ mod tests {
     }
 
     #[test]
-    fn test_private_key_헤더_마스킹() {
+    fn test_private_key_header_masking() {
         let input = "-----BEGIN RSA PRIVATE KEY-----";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:PRIVATE_KEY]"));
@@ -147,7 +139,7 @@ mod tests {
     }
 
     #[test]
-    fn test_민감정보_없으면_원본_유지() {
+    fn test_no_sensitive_data_preserves_original() {
         let input = "일반 텍스트입니다. 아무 민감 정보 없음.";
         let (output, result) = redact_text(input);
         assert_eq!(output, input);
@@ -156,7 +148,7 @@ mod tests {
     }
 
     #[test]
-    fn test_여러_패턴_동시_매칭() {
+    fn test_multiple_patterns_matched() {
         let input = "키: sk-abcdefghijklmnopqrstuvwxyz1234\n주소: 10.0.0.1";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:API_KEY]"));
@@ -166,7 +158,7 @@ mod tests {
     }
 
     #[test]
-    fn test_같은_패턴_여러번_매칭() {
+    fn test_same_pattern_matched_multiple_times() {
         let input = "10.0.0.1 그리고 192.168.0.1";
         let (_, result) = redact_text(input);
         assert_eq!(result.total_count, 2);
@@ -174,14 +166,14 @@ mod tests {
     }
 
     #[test]
-    fn test_empty_결과_기본값() {
+    fn test_empty_result_defaults() {
         let result = RedactResult::empty();
         assert_eq!(result.total_count, 0);
         assert!(result.by_type.is_empty());
     }
 
     #[test]
-    fn test_merge_두_결과_합산() {
+    fn test_merge_two_results() {
         let mut a = RedactResult {
             total_count: 2,
             by_type: BTreeMap::from([("API_KEY".to_string(), 2)]),
@@ -196,7 +188,7 @@ mod tests {
     }
 
     #[test]
-    fn test_format_summary_알파벳순() {
+    fn test_format_summary_alphabetical() {
         let result = RedactResult {
             total_count: 4,
             by_type: BTreeMap::from([
@@ -208,14 +200,14 @@ mod tests {
     }
 
     #[test]
-    fn test_api_key_짧으면_미매칭() {
+    fn test_api_key_short_no_match() {
         let input = "sk-short123";
         let (_, result) = redact_text(input);
         assert_eq!(result.total_count, 0);
     }
 
     #[test]
-    fn test_public_ip_미매칭() {
+    fn test_public_ip_no_match() {
         let input = "서버: 8.8.8.8";
         let (output, result) = redact_text(input);
         assert_eq!(output, input);
@@ -223,16 +215,16 @@ mod tests {
     }
 
     #[test]
-    fn test_env_secret_작은따옴표_매칭() {
+    fn test_env_secret_matches_single_quotes() {
         let input = "secret = 'my_secret_value'";
         let (output, result) = redact_text(input);
         assert!(output.contains("[REDACTED:ENV_SECRET]"));
         assert_eq!(result.total_count, 1);
     }
 
-    /// 실제 세션 로그에 가까운 프롬프트 텍스트로 통합 검증합니다.
+    /// Integration test with realistic session log content.
     #[test]
-    fn test_현실적_프롬프트_통합_마스킹() {
+    fn test_realistic_prompt_combined_masking() {
         let prompt = r#"[Session: abc123]
 [USER] .env 파일에 api_key = "sk-proj-abcdefghijklmnopqrstuvwxyz1234" 넣었는데 작동 안 해
 [ASSISTANT] 키 형식을 확인해보겠습니다. Authorization: Bearer eyJhbGciOiJIUzI1NiJ9.payload 헤더로 테스트하세요
@@ -242,7 +234,7 @@ mod tests {
 
         let (output, result) = redact_text(prompt);
 
-        // 모든 민감 정보가 마스킹되었는지 확인
+        // Verify all sensitive data is masked
         assert!(output.contains("[REDACTED:ENV_SECRET]"));
         assert!(output.contains("[REDACTED:BEARER_TOKEN]"));
         assert!(output.contains("[REDACTED:AWS_KEY]"));
@@ -250,12 +242,12 @@ mod tests {
         assert!(output.contains("[REDACTED:GITHUB_TOKEN]"));
         assert!(output.contains("[REDACTED:PRIVATE_KEY]"));
 
-        // 원본 민감 정보가 남아있지 않은지 확인
+        // Verify original sensitive data is removed
         assert!(!output.contains("sk-proj-abcdefghijklmnopqrstuvwxyz1234"));
         assert!(!output.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!output.contains("10.0.1.50"));
 
-        // 일반 텍스트는 그대로 유지
+        // Verify non-sensitive text is preserved
         assert!(output.contains("[Session: abc123]"));
         assert!(output.contains("[USER]"));
         assert!(output.contains("작동 안 해"));
