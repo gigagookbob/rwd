@@ -1,11 +1,6 @@
-// LLM 프로바이더 추상화 모듈.
-//
-// LlmProvider enum으로 여러 LLM API를 통합합니다.
-// enum + match 패턴은 LogEntry, Commands와 동일한 방식입니다 (Rust Book Ch.6 참조).
-// Anthropic과 OpenAI를 지원하며, 환경 변수로 프로바이더를 선택합니다.
+// LLM provider abstraction. Supports Anthropic and OpenAI via a unified enum dispatch.
 
-/// 시스템 프롬프트 — 모든 프로바이더가 공유합니다.
-/// 프로바이더에 관계없이 동일한 분석 지시를 전달합니다.
+/// System prompt shared by all providers.
 pub const SYSTEM_PROMPT: &str = r#"You are an AI coding session analyst. You receive transcripts of conversations between a developer and an AI coding assistant.
 
 Analyze the conversation and extract insights in the following JSON format. Return ONLY valid JSON, no other text.
@@ -52,8 +47,7 @@ Rules:
 - Return ONLY the JSON object. Do not wrap it in markdown code fences.
 - ALL text values (except session_id) MUST be in Korean."#;
 
-/// 개발 진척사항 요약용 시스템 프롬프트.
-/// 비개발자도 이해할 수 있는 한국어 Markdown을 생성하도록 지시합니다.
+/// System prompt for development progress summaries.
 pub const SUMMARY_PROMPT: &str = r#"You are a development progress summarizer. You receive session analysis results from a developer's day.
 
 Generate a concise Markdown summary of what was accomplished today. This summary will be shared with both developers and non-developers.
@@ -68,8 +62,7 @@ Rules:
 - ALL text MUST be in Korean (한국어)
 - If multiple tasks were done in the same project, use separate bullets under the same header"#;
 
-/// 슬랙 공유용 메시지 변환 시스템 프롬프트.
-/// 개발 작업 로그를 비개발자도 이해할 수 있는 슬랙 메시지로 변환합니다.
+/// System prompt for Slack-friendly message generation.
 pub const SLACK_PROMPT: &str = r#"너는 개발자가 작성한 작업 내용을 비개발자도 이해할 수 있는 슬랙 공유 메시지로 변환하는 역할을 한다.
 
 출력 형식:
@@ -107,20 +100,14 @@ pub const SLACK_PROMPT: &str = r#"너는 개발자가 작성한 작업 내용을
 
 결과만 출력하고 설명은 하지 않는다."#;
 
-/// LLM 프로바이더를 나타내는 enum.
-///
-/// enum은 "이것 또는 저것" 중 하나의 값을 표현합니다 (Rust Book Ch.6.1).
-/// 각 변형(variant)은 서로 다른 프로바이더에 대응합니다.
-/// match 표현식으로 모든 변형을 처리해야 컴파일됩니다 — 새 프로바이더 추가 시
-/// 컴파일러가 처리하지 않은 곳을 자동으로 알려줍니다.
+/// LLM provider enum. Adding a new variant triggers compile errors at unhandled match arms.
 pub enum LlmProvider {
     Anthropic,
     OpenAi,
 }
 
 impl LlmProvider {
-    /// 모델별 최대 출력 토큰.
-    /// 모델 스펙이며 tier/사용자와 무관한 상수.
+    /// Maximum output tokens for the model (provider-specific constant).
     pub fn max_output_tokens(&self) -> u64 {
         match self {
             LlmProvider::Anthropic => 32_000,
@@ -128,10 +115,7 @@ impl LlmProvider {
         }
     }
 
-    /// 선택된 프로바이더의 API를 호출하여 원시 텍스트 응답을 반환합니다.
-    ///
-    /// &self는 이 메서드가 LlmProvider 값의 참조를 받는다는 의미입니다.
-    /// match self로 어떤 프로바이더인지 확인하고, 해당 모듈의 함수를 호출합니다.
+    /// Calls the provider's API and returns the raw text response.
     pub async fn call_api(
         &self,
         api_key: &str,
@@ -149,8 +133,7 @@ impl LlmProvider {
         }
     }
 
-    /// 개발 진척사항 요약 API를 호출합니다.
-    /// call_api()와 동일한 구조이지만, SUMMARY_PROMPT를 사용합니다.
+    /// Calls the summary API (uses SUMMARY_PROMPT).
     pub async fn call_summary_api(
         &self,
         api_key: &str,
@@ -167,8 +150,7 @@ impl LlmProvider {
         }
     }
 
-    /// 슬랙 공유용 메시지 API를 호출합니다.
-    /// call_summary_api()와 동일한 구조이지만, SLACK_PROMPT를 사용합니다.
+    /// Calls the Slack message API (uses SLACK_PROMPT).
     pub async fn call_slack_api(
         &self,
         api_key: &str,
@@ -185,8 +167,7 @@ impl LlmProvider {
         }
     }
 
-    /// max_tokens를 지정할 수 있는 API 호출.
-    /// 요약 호출 시 max_tokens를 2000으로 제한한다.
+    /// API call with explicit max_tokens (used for chunk summarization).
     pub async fn call_api_with_max_tokens(
         &self,
         api_key: &str,
@@ -210,7 +191,7 @@ impl LlmProvider {
         }
     }
 
-    /// 프로바이더의 표시 이름을 반환합니다.
+    /// Returns the display name for this provider.
     pub fn display_name(&self) -> &'static str {
         match self {
             LlmProvider::Anthropic => "Claude",
@@ -218,8 +199,8 @@ impl LlmProvider {
         }
     }
 
-    /// API probe 호출로 사용자의 실제 rate limit을 확인한다.
-    /// 반환: (RateLimits, probed) — probed가 true면 실제 확인, false면 기본값 fallback.
+    /// Probes actual rate limits via a lightweight API call.
+    /// Returns (RateLimits, probed) where probed=true means real values, false means defaults.
     pub async fn probe_rate_limits(
         &self,
         api_key: &str,
@@ -239,10 +220,7 @@ impl LlmProvider {
     }
 }
 
-/// 설정 파일(~/.config/rwd/config.toml)에서 LLM 프로바이더와 API 키를 읽습니다.
-///
-/// 반환: (프로바이더, API 키) 튜플.
-/// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
+/// Loads the LLM provider and API key from config (~/.config/rwd/config.toml).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
     let config = crate::config::load_config_if_exists()
         .ok_or(crate::messages::error::NO_CONFIG)?;

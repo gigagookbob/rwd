@@ -1,19 +1,17 @@
-// redactor 모듈은 LLM API 전송 전 민감 정보를 탐지하고 마스킹하는 역할을 합니다.
-// analyzer 모듈에서 build_prompt() 결과에 적용하여, 외부 유출을 차단합니다.
+// Detects and masks sensitive data before sending to LLM APIs.
 
 pub mod patterns;
 
 use std::collections::BTreeMap;
 
-/// 마스킹 결과 요약.
-/// BTreeMap을 사용하여 타입명 알파벳순 정렬을 보장합니다 (HashMap은 순서 비보장).
+/// Masking result summary. BTreeMap ensures alphabetical ordering by type name.
 pub struct RedactResult {
     pub total_count: usize,
     pub by_type: BTreeMap<String, usize>,
 }
 
 impl RedactResult {
-    /// redactor 비활성 시 사용하는 빈 결과.
+    /// Empty result for when redactor is disabled.
     pub fn empty() -> Self {
         Self {
             total_count: 0,
@@ -21,8 +19,7 @@ impl RedactResult {
         }
     }
 
-    /// 여러 RedactResult를 합산합니다 (Claude + Codex 결과 병합).
-    /// entry() API는 키가 없으면 기본값을 삽입하고, 있으면 기존 값에 접근합니다 (Rust Book Ch.8).
+    /// Merges another result into this one (e.g., Claude + Codex).
     pub fn merge(&mut self, other: RedactResult) {
         self.total_count += other.total_count;
         for (key, count) in other.by_type {
@@ -30,7 +27,7 @@ impl RedactResult {
         }
     }
 
-    /// "API_KEY: 3, BEARER_TOKEN: 1" 형식의 요약 문자열을 생성합니다.
+    /// Formats summary like "API_KEY: 3, BEARER_TOKEN: 1".
     pub fn format_summary(&self) -> String {
         self.by_type
             .iter()
@@ -40,11 +37,8 @@ impl RedactResult {
     }
 }
 
-/// 텍스트에서 민감 정보를 탐지하고 [REDACTED:TYPE]으로 치환합니다.
-/// 패턴은 LazyLock으로 초기화되므로 이 함수는 실패하지 않습니다.
-///
-/// 주의: 규칙은 순서대로 적용됩니다. 앞선 규칙의 치환 결과가
-/// 뒤따르는 규칙에 매칭되지 않도록 패턴을 설계해야 합니다.
+/// Detects sensitive data in text and replaces with [REDACTED:TYPE].
+/// Rules are applied in order — earlier replacements must not match later patterns.
 pub fn redact_text(text: &str) -> (String, RedactResult) {
     let rules = patterns::builtin_rules();
     let mut result_text = text.to_string();
@@ -52,8 +46,6 @@ pub fn redact_text(text: &str) -> (String, RedactResult) {
     let mut total_count: usize = 0;
 
     for rule in rules {
-        // find_iter()로 매칭 횟수를 먼저 세고, 매칭이 있을 때만 치환합니다.
-        // replace_all()에 &str을 넘기면 캡처 기반 코드 경로를 타지 않아 더 효율적입니다.
         let count = rule.pattern.find_iter(&result_text).count();
         if count > 0 {
             let replacement = format!("[REDACTED:{}]", rule.name);
@@ -230,7 +222,7 @@ mod tests {
         assert_eq!(result.total_count, 1);
     }
 
-    /// 실제 세션 로그에 가까운 프롬프트 텍스트로 통합 검증합니다.
+    /// Integration test with realistic session log content.
     #[test]
     fn test_현실적_프롬프트_통합_마스킹() {
         let prompt = r#"[Session: abc123]
@@ -242,7 +234,7 @@ mod tests {
 
         let (output, result) = redact_text(prompt);
 
-        // 모든 민감 정보가 마스킹되었는지 확인
+        // Verify all sensitive data is masked
         assert!(output.contains("[REDACTED:ENV_SECRET]"));
         assert!(output.contains("[REDACTED:BEARER_TOKEN]"));
         assert!(output.contains("[REDACTED:AWS_KEY]"));
@@ -250,12 +242,12 @@ mod tests {
         assert!(output.contains("[REDACTED:GITHUB_TOKEN]"));
         assert!(output.contains("[REDACTED:PRIVATE_KEY]"));
 
-        // 원본 민감 정보가 남아있지 않은지 확인
+        // Verify original sensitive data is removed
         assert!(!output.contains("sk-proj-abcdefghijklmnopqrstuvwxyz1234"));
         assert!(!output.contains("AKIAIOSFODNN7EXAMPLE"));
         assert!(!output.contains("10.0.1.50"));
 
-        // 일반 텍스트는 그대로 유지
+        // Verify non-sensitive text is preserved
         assert!(output.contains("[Session: abc123]"));
         assert!(output.contains("[USER]"));
         assert!(output.contains("작동 안 해"));
