@@ -1,53 +1,53 @@
-# M5 설정 시스템 구현 계획
+# M5 Config System Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** `.env` 의존을 제거하고, `rwd init` / `rwd config` 커맨드로 설정을 관리하는 시스템 구축. Obsidian vault 자동 감지 포함.
+**Goal:** Remove the `.env` dependency and build a configuration management system via `rwd init` / `rwd config` commands. Includes Obsidian vault auto-detection.
 
-**Architecture:** `~/.config/rwd/config.toml`에 설정 파일을 저장한다. `config` 모듈이 TOML 읽기/쓰기를 담당하고, CLI 서브커맨드(`Init`, `Config`)가 사용자 인터랙션을 처리한다. 기존 `analyzer/provider.rs`와 `output/mod.rs`가 `.env` 대신 config 모듈에서 값을 읽도록 전환한다.
+**Architecture:** Store the config file at `~/.config/rwd/config.toml`. The `config` module handles TOML read/write, and CLI subcommands (`Init`, `Config`) handle user interaction. Migrate existing `analyzer/provider.rs` and `output/mod.rs` to read from the config module instead of `.env`.
 
-**Tech Stack:** `toml` (TOML 파싱), `dirs` (이미 사용 중, XDG 경로), `serde` (직렬화)
-
----
-
-## 파일 구조
-
-| 액션 | 파일 | 역할 |
-|------|------|------|
-| 생성 | `src/config.rs` | 설정 파일 읽기/쓰기, Obsidian vault 자동 감지 |
-| 수정 | `src/cli.rs` | `Init`, `Config` 서브커맨드 추가 |
-| 수정 | `src/main.rs` | `Init`, `Config` 커맨드 핸들러 추가 |
-| 수정 | `src/analyzer/provider.rs` | `.env` → config 모듈로 전환 |
-| 수정 | `src/output/mod.rs` | `.env` → config 모듈로 전환 |
-| 수정 | `Cargo.toml` | `toml` 크레이트 추가 |
+**Tech Stack:** `toml` (TOML parsing), `dirs` (already in use, XDG paths), `serde` (serialization)
 
 ---
 
-## Chunk 1: config 모듈 기반
+## File Structure
 
-### Task 1: `toml` 크레이트 추가 및 설정 구조체 정의
+| Action | File | Role |
+|--------|------|------|
+| Create | `src/config.rs` | Config file read/write, Obsidian vault auto-detection |
+| Modify | `src/cli.rs` | Add `Init`, `Config` subcommands |
+| Modify | `src/main.rs` | Add `Init`, `Config` command handlers |
+| Modify | `src/analyzer/provider.rs` | Switch from `.env` to config module |
+| Modify | `src/output/mod.rs` | Switch from `.env` to config module |
+| Modify | `Cargo.toml` | Add `toml` crate |
+
+---
+
+## Chunk 1: Config Module Foundation
+
+### Task 1: Add `toml` crate and define config structs
 
 **Files:**
 - Modify: `Cargo.toml`
 - Create: `src/config.rs`
-- Modify: `src/main.rs:3` (mod 선언 추가)
+- Modify: `src/main.rs:3` (add mod declaration)
 
-- [ ] **Step 1: Cargo.toml에 toml 크레이트 추가**
+- [ ] **Step 1: Add toml crate to Cargo.toml**
 
-`Cargo.toml`의 `[dependencies]`에 추가:
+Add to `[dependencies]` in `Cargo.toml`:
 ```toml
 toml = "0.8"
 ```
 
-- [ ] **Step 2: config.rs 생성 — 설정 구조체 정의**
+- [ ] **Step 2: Create config.rs — define config structs**
 
-`src/config.rs` 생성:
+Create `src/config.rs`:
 ```rust
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
-/// 설정 파일의 최상위 구조체.
-/// Serialize/Deserialize derive로 TOML ↔ Rust 구조체 자동 변환 (serde 패턴).
+/// Top-level config file struct.
+/// Serialize/Deserialize derive enables automatic TOML ↔ Rust struct conversion (serde pattern).
 #[derive(Debug, Serialize, Deserialize)]
 pub struct Config {
     pub llm: LlmConfig,
@@ -66,37 +66,37 @@ pub struct OutputConfig {
 }
 ```
 
-- [ ] **Step 3: main.rs에 mod config 선언 추가**
+- [ ] **Step 3: Add mod config declaration to main.rs**
 
-`src/main.rs` 상단에 `mod config;` 추가.
+Add `mod config;` at the top of `src/main.rs`.
 
-- [ ] **Step 4: cargo build로 컴파일 확인**
+- [ ] **Step 4: Verify compilation with cargo build**
 
 Run: `cargo build`
-Expected: 성공 (warning 없음)
+Expected: success (no warnings)
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add Cargo.toml src/config.rs src/main.rs
-git commit -m "feat: config 모듈 뼈대 — Config 구조체 및 toml 크레이트 추가"
+git commit -m "feat: config module skeleton — Config struct and toml crate"
 ```
 
 ---
 
-### Task 2: 설정 파일 경로 및 읽기/쓰기 함수
+### Task 2: Config file path and read/write functions
 
 **Files:**
 - Modify: `src/config.rs`
 
-- [ ] **Step 1: 실패하는 테스트 작성 — config_path()**
+- [ ] **Step 1: Write a failing test — config_path()**
 
-`src/config.rs` 하단에 테스트 모듈 추가:
+Add a test module at the bottom of `src/config.rs`:
 ```rust
-/// 설정 파일 경로를 반환합니다: ~/.config/rwd/config.toml
-/// dirs::config_dir()는 OS별 설정 디렉토리를 반환합니다.
+/// Returns the config file path: ~/.config/rwd/config.toml
+/// dirs::config_dir() returns the OS-specific config directory.
 /// macOS: ~/Library/Application Support, Linux: ~/.config
-/// 여기서는 Unix 관례에 맞게 ~/.config를 직접 사용합니다.
+/// Here we use ~/.config directly to follow Unix conventions.
 pub fn config_path() -> Result<PathBuf, ConfigError> {
     todo!()
 }
@@ -108,42 +108,42 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_config_path_rwd_디렉토리_포함() {
-        let path = config_path().expect("경로 생성 성공");
+    fn test_config_path_contains_rwd_directory() {
+        let path = config_path().expect("path creation should succeed");
         assert!(path.ends_with("rwd/config.toml"));
     }
 }
 ```
 
-- [ ] **Step 2: 테스트 실행 — 실패 확인**
+- [ ] **Step 2: Run test — verify failure**
 
 Run: `cargo test test_config_path`
-Expected: FAIL (`todo!()` 패닉)
+Expected: FAIL (`todo!()` panic)
 
-- [ ] **Step 3: config_path() 구현**
+- [ ] **Step 3: Implement config_path()**
 
-`todo!()`를 교체:
+Replace `todo!()`:
 ```rust
 pub fn config_path() -> Result<PathBuf, ConfigError> {
     let home = dirs::home_dir()
-        .ok_or("홈 디렉토리를 찾을 수 없습니다")?;
+        .ok_or("Could not find home directory")?;
     Ok(home.join(".config").join("rwd").join("config.toml"))
 }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Verify test passes**
 
 Run: `cargo test test_config_path`
 Expected: PASS
 
-- [ ] **Step 5: save_config / load_config 테스트 작성**
+- [ ] **Step 5: Write save_config / load_config tests**
 
 ```rust
 #[test]
-fn test_save_and_load_config_왕복_확인() {
+fn test_save_and_load_config_roundtrip() {
     let temp_dir = std::env::temp_dir().join("rwd_test_config");
-    let _ = std::fs::remove_dir_all(&temp_dir); // 이전 테스트 잔여물 정리
-    std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+    let _ = std::fs::remove_dir_all(&temp_dir); // Clean up previous test remnants
+    std::fs::create_dir_all(&temp_dir).expect("create directory");
     let path = temp_dir.join("config.toml");
 
     let config = Config {
@@ -156,8 +156,8 @@ fn test_save_and_load_config_왕복_확인() {
         },
     };
 
-    save_config(&config, &path).expect("저장 성공");
-    let loaded = load_config(&path).expect("로드 성공");
+    save_config(&config, &path).expect("save should succeed");
+    let loaded = load_config(&path).expect("load should succeed");
 
     assert_eq!(loaded.llm.provider, "anthropic");
     assert_eq!(loaded.llm.api_key, "sk-test-key");
@@ -167,17 +167,17 @@ fn test_save_and_load_config_왕복_확인() {
 }
 ```
 
-- [ ] **Step 6: 테스트 실행 — 실패 확인**
+- [ ] **Step 6: Run test — verify failure**
 
 Run: `cargo test test_save_and_load_config`
-Expected: FAIL (함수 미존재)
+Expected: FAIL (functions don't exist)
 
-- [ ] **Step 7: save_config / load_config 구현**
+- [ ] **Step 7: Implement save_config / load_config**
 
 ```rust
-/// 설정을 TOML 파일로 저장합니다.
-/// toml::to_string_pretty()는 Config 구조체를 읽기 좋은 TOML 문자열로 변환합니다.
-/// create_dir_all()로 부모 디렉토리가 없으면 자동 생성합니다.
+/// Saves config to a TOML file.
+/// toml::to_string_pretty() converts the Config struct to a human-readable TOML string.
+/// create_dir_all() auto-creates parent directories if they don't exist.
 pub fn save_config(config: &Config, path: &std::path::Path) -> Result<(), ConfigError> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -185,8 +185,8 @@ pub fn save_config(config: &Config, path: &std::path::Path) -> Result<(), Config
     let toml_str = toml::to_string_pretty(config)?;
     std::fs::write(path, toml_str)?;
 
-    // API 키가 포함된 파일이므로 소유자만 읽기/쓰기 가능하도록 권한 설정합니다.
-    // Unix 권한 0o600 = owner read+write only (Rust Book에는 없지만, 보안 관례).
+    // Set permissions to owner read/write only since the file contains API keys.
+    // Unix permission 0o600 = owner read+write only (security convention).
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -196,8 +196,8 @@ pub fn save_config(config: &Config, path: &std::path::Path) -> Result<(), Config
     Ok(())
 }
 
-/// TOML 파일에서 설정을 읽습니다.
-/// toml::from_str()는 TOML 문자열을 Config 구조체로 역직렬화합니다.
+/// Reads config from a TOML file.
+/// toml::from_str() deserializes a TOML string into a Config struct.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     let content = std::fs::read_to_string(path)?;
     let config: Config = toml::from_str(&content)?;
@@ -205,37 +205,37 @@ pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
 }
 ```
 
-- [ ] **Step 8: 테스트 통과 확인**
+- [ ] **Step 8: Verify test passes**
 
 Run: `cargo test test_save_and_load_config`
 Expected: PASS
 
-- [ ] **Step 9: cargo clippy 확인 후 커밋**
+- [ ] **Step 9: Run cargo clippy, then commit**
 
 Run: `cargo clippy && cargo test`
-Expected: 경고 0, 테스트 전체 통과
+Expected: 0 warnings, all tests pass
 
 ```bash
 git add src/config.rs
-git commit -m "feat: config 읽기/쓰기 — config_path, save_config, load_config"
+git commit -m "feat: config read/write — config_path, save_config, load_config"
 ```
 
 ---
 
-### Task 3: Obsidian vault 자동 감지
+### Task 3: Obsidian vault auto-detection
 
 **Files:**
 - Modify: `src/config.rs`
 
-- [ ] **Step 1: 실패하는 테스트 작성 — detect_obsidian_vault()**
+- [ ] **Step 1: Write a failing test — detect_obsidian_vault()**
 
 ```rust
 #[test]
-fn test_detect_obsidian_vault_obsidian폴더_있으면_경로반환() {
+fn test_detect_obsidian_vault_returns_path_when_obsidian_folder_exists() {
     let temp_dir = std::env::temp_dir().join("rwd_test_vault_detect");
     let vault_dir = temp_dir.join("TestVault");
     let obsidian_marker = vault_dir.join(".obsidian");
-    std::fs::create_dir_all(&obsidian_marker).expect("디렉토리 생성");
+    std::fs::create_dir_all(&obsidian_marker).expect("create directory");
 
     let result = detect_vault_in_dir(&temp_dir);
     assert!(result.is_some());
@@ -245,9 +245,9 @@ fn test_detect_obsidian_vault_obsidian폴더_있으면_경로반환() {
 }
 
 #[test]
-fn test_detect_obsidian_vault_없으면_None() {
+fn test_detect_obsidian_vault_returns_none_when_not_found() {
     let temp_dir = std::env::temp_dir().join("rwd_test_no_vault");
-    std::fs::create_dir_all(&temp_dir).expect("디렉토리 생성");
+    std::fs::create_dir_all(&temp_dir).expect("create directory");
 
     let result = detect_vault_in_dir(&temp_dir);
     assert!(result.is_none());
@@ -256,17 +256,17 @@ fn test_detect_obsidian_vault_없으면_None() {
 }
 ```
 
-- [ ] **Step 2: 테스트 실행 — 실패 확인**
+- [ ] **Step 2: Run test — verify failure**
 
 Run: `cargo test test_detect_obsidian_vault`
-Expected: FAIL (함수 미존재)
+Expected: FAIL (function doesn't exist)
 
-- [ ] **Step 3: detect_vault_in_dir 구현**
+- [ ] **Step 3: Implement detect_vault_in_dir**
 
 ```rust
-/// 주어진 디렉토리 하위에서 .obsidian 폴더가 있는 디렉토리를 찾습니다.
-/// .obsidian 폴더는 Obsidian이 vault로 인식하는 마커입니다.
-/// read_dir()로 1단계 깊이만 탐색합니다 — 깊은 중첩은 불필요합니다.
+/// Finds a directory containing a .obsidian folder within the given directory.
+/// The .obsidian folder is the marker that Obsidian uses to recognize a vault.
+/// Uses read_dir() for 1-level depth search only — deep nesting is unnecessary.
 pub fn detect_vault_in_dir(search_dir: &std::path::Path) -> Option<PathBuf> {
     let entries = std::fs::read_dir(search_dir).ok()?;
     for entry in entries.flatten() {
@@ -279,29 +279,29 @@ pub fn detect_vault_in_dir(search_dir: &std::path::Path) -> Option<PathBuf> {
 }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Verify test passes**
 
 Run: `cargo test test_detect_obsidian_vault`
 Expected: PASS
 
-- [ ] **Step 5: detect_obsidian_vault() 통합 함수 작성**
+- [ ] **Step 5: Write detect_obsidian_vault() integration function**
 
 ```rust
-/// Obsidian vault를 자동 감지합니다.
-/// 1순위: ~/Documents/Obsidian/ 하위에서 .obsidian 마커 탐색
-/// 찾지 못하면 None 반환 — 호출부에서 기본 경로를 사용합니다.
+/// Auto-detects the Obsidian vault.
+/// Priority: search for .obsidian marker under ~/Documents/Obsidian/
+/// Returns None if not found — the caller falls back to a default path.
 pub fn detect_obsidian_vault() -> Option<PathBuf> {
     let home = dirs::home_dir()?;
     let obsidian_dir = home.join("Documents").join("Obsidian");
     detect_vault_in_dir(&obsidian_dir)
 }
 
-/// 기본 출력 경로(vault root)를 결정합니다.
-/// 1. Obsidian vault 자동 감지 → {vault} (vault root 반환)
-/// 2. 감지 실패 → ~/.rwd/output (기본 경로)
+/// Determines the default output path (vault root).
+/// 1. Auto-detect Obsidian vault → {vault} (return vault root)
+/// 2. Detection failed → ~/.rwd/output (default path)
 ///
-/// 주의: Daily/ 하위 디렉토리는 save_to_vault()가 자동으로 붙입니다.
-/// 여기서는 vault root만 반환합니다.
+/// Note: The Daily/ subdirectory is appended automatically by save_to_vault().
+/// This function only returns the vault root.
 pub fn default_output_path() -> PathBuf {
     if let Some(vault) = detect_obsidian_vault() {
         return vault;
@@ -311,119 +311,119 @@ pub fn default_output_path() -> PathBuf {
 }
 ```
 
-- [ ] **Step 6: cargo clippy 확인 후 커밋**
+- [ ] **Step 6: Run cargo clippy, then commit**
 
 Run: `cargo clippy && cargo test`
-Expected: 경고 0, 테스트 전체 통과
+Expected: 0 warnings, all tests pass
 
 ```bash
 git add src/config.rs
-git commit -m "feat: Obsidian vault 자동 감지 — .obsidian 마커 기반 탐색"
+git commit -m "feat: Obsidian vault auto-detection — .obsidian marker based search"
 ```
 
 ---
 
-## Chunk 2: CLI 커맨드 및 기존 모듈 전환
+## Chunk 2: CLI Commands and Module Migration
 
-### Task 4: CLI에 Init, Config 서브커맨드 추가
+### Task 4: Add Init, Config subcommands to CLI
 
 **Files:**
 - Modify: `src/cli.rs`
 
-- [ ] **Step 1: cli.rs에 서브커맨드 추가**
+- [ ] **Step 1: Add subcommands to cli.rs**
 
 ```rust
 use clap::{Parser, Subcommand};
 
-/// AI 코딩 세션 로그를 분석하여 일일 개발 인사이트를 추출하는 CLI 도구
+/// CLI tool for analyzing AI coding session logs and extracting daily development insights
 #[derive(Parser)]
 #[command(name = "rwd", version, about)]
 pub struct Cli {
-    /// 실행할 서브커맨드
+    /// Subcommand to execute
     #[command(subcommand)]
     pub command: Commands,
 }
 
-/// rwd가 지원하는 서브커맨드 목록
+/// List of subcommands supported by rwd
 #[derive(Subcommand)]
 pub enum Commands {
-    /// 오늘의 세션 로그를 분석합니다
+    /// Analyze today's session logs
     Today,
-    /// 초기 설정을 수행합니다 (API 키, 출력 경로)
+    /// Run initial setup (API key, output path)
     Init,
-    /// 설정 값을 변경합니다
+    /// Change a configuration value
     Config {
-        /// 설정 키 (output-path)
+        /// Config key (output-path)
         key: String,
-        /// 설정할 값
+        /// Value to set
         value: String,
     },
 }
 ```
 
-- [ ] **Step 2: cargo build 확인**
+- [ ] **Step 2: Run cargo build**
 
 Run: `cargo build`
-Expected: 컴파일 에러 — `main.rs`의 match에서 `Init`, `Config` 미처리
+Expected: compile error — `Init`, `Config` not handled in `main.rs` match
 
-- [ ] **Step 3: main.rs에 placeholder 핸들러 추가**
+- [ ] **Step 3: Add placeholder handlers to main.rs**
 
-`main.rs`의 `match args.command`에 추가:
+Add to `match args.command` in `main.rs`:
 ```rust
 Commands::Init => {
-    println!("TODO: init 구현 예정");
+    println!("TODO: init implementation pending");
 }
 Commands::Config { key, value } => {
     println!("TODO: config {key} = {value}");
 }
 ```
 
-- [ ] **Step 4: cargo build 확인**
+- [ ] **Step 4: Run cargo build**
 
 Run: `cargo build`
-Expected: 성공
+Expected: success
 
-- [ ] **Step 5: rwd --help 출력 확인**
+- [ ] **Step 5: Verify rwd --help output**
 
 Run: `cargo run -- --help`
-Expected: `today`, `init`, `config` 서브커맨드가 모두 표시
+Expected: `today`, `init`, `config` subcommands all displayed
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/cli.rs src/main.rs
-git commit -m "feat: CLI에 init, config 서브커맨드 추가"
+git commit -m "feat: add init, config subcommands to CLI"
 ```
 
 ---
 
-### Task 5: `rwd init` 구현
+### Task 5: Implement `rwd init`
 
 **Files:**
 - Modify: `src/main.rs`
 - Modify: `src/config.rs`
 
-- [ ] **Step 1: config.rs에 run_init() 함수 작성**
+- [ ] **Step 1: Write run_init() function in config.rs**
 
 ```rust
-/// rwd init 실행 — API 키를 입력받고, 출력 경로를 자동 감지하여 설정 파일에 저장합니다.
+/// Runs rwd init — prompts for API key, auto-detects output path, and saves to config file.
 ///
-/// eprint!는 stderr로 프롬프트를 출력합니다 — stdout은 데이터 출력용으로 분리합니다.
-/// stdin().read_line()은 사용자 입력을 한 줄 읽습니다 (Rust Book Ch.2 참조).
+/// eprint! outputs prompts to stderr — stdout is reserved for data output.
+/// stdin().read_line() reads one line of user input (Rust Book Ch.2).
 pub fn run_init() -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
-    // API 키 입력
-    eprint!("LLM 프로바이더를 선택하세요 (anthropic/openai) [anthropic]: ");
+    // Provider selection
+    eprint!("Select LLM provider (anthropic/openai) [anthropic]: ");
     let mut provider_input = String::new();
     std::io::stdin().read_line(&mut provider_input)?;
     let provider = provider_input.trim();
     let provider = if provider.is_empty() { "anthropic" } else { provider };
 
     let key_prompt = match provider {
-        "anthropic" => "Anthropic API 키를 입력하세요: ",
-        "openai" => "OpenAI API 키를 입력하세요: ",
-        _ => return Err(format!("지원하지 않는 프로바이더: {provider}").into()),
+        "anthropic" => "Enter your Anthropic API key: ",
+        "openai" => "Enter your OpenAI API key: ",
+        _ => return Err(format!("Unsupported provider: {provider}").into()),
     };
     eprint!("{key_prompt}");
     let mut api_key = String::new();
@@ -431,19 +431,19 @@ pub fn run_init() -> Result<(), ConfigError> {
     let api_key = api_key.trim().to_string();
 
     if api_key.is_empty() {
-        return Err("API 키가 비어있습니다.".into());
+        return Err("API key is empty.".into());
     }
 
-    // 출력 경로 자동 감지
+    // Auto-detect output path
     let output_path = default_output_path();
     match detect_obsidian_vault() {
         Some(vault) => {
-            println!("Obsidian vault 감지됨: {}", vault.display());
-            println!("출력 경로: {}", output_path.display());
+            println!("Obsidian vault detected: {}", vault.display());
+            println!("Output path: {}", output_path.display());
         }
         None => {
-            println!("Obsidian vault를 찾지 못했습니다.");
-            println!("기본 출력 경로: {}", output_path.display());
+            println!("Could not find an Obsidian vault.");
+            println!("Default output path: {}", output_path.display());
         }
     }
 
@@ -458,63 +458,63 @@ pub fn run_init() -> Result<(), ConfigError> {
     };
 
     save_config(&config, &config_file)?;
-    println!("설정 저장 완료: {}", config_file.display());
+    println!("Config saved: {}", config_file.display());
     Ok(())
 }
 ```
 
-- [ ] **Step 2: main.rs에서 Init 핸들러 연결**
+- [ ] **Step 2: Connect Init handler in main.rs**
 
-placeholder를 교체:
+Replace placeholder:
 ```rust
 Commands::Init => {
     if let Err(e) = config::run_init() {
-        eprintln!("초기 설정 실패: {e}");
+        eprintln!("Initial setup failed: {e}");
         std::process::exit(1);
     }
 }
 ```
 
-- [ ] **Step 3: cargo build 확인**
+- [ ] **Step 3: Run cargo build**
 
 Run: `cargo build`
-Expected: 성공
+Expected: success
 
-- [ ] **Step 4: 실제 실행 테스트 (수동)**
+- [ ] **Step 4: Manual run test**
 
 Run: `cargo run -- init`
-Expected: 프로바이더/API 키 입력 프롬프트 → 설정 저장 메시지 출력
+Expected: provider/API key prompts → config saved message
 
-- [ ] **Step 5: 설정 파일 생성 확인**
+- [ ] **Step 5: Verify config file creation**
 
 Run: `cat ~/.config/rwd/config.toml`
-Expected: TOML 형식으로 저장된 설정 확인
+Expected: config saved in TOML format
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/config.rs src/main.rs
-git commit -m "feat: rwd init 구현 — API 키 입력 + Obsidian vault 자동 감지"
+git commit -m "feat: implement rwd init — API key input + Obsidian vault auto-detection"
 ```
 
 ---
 
-### Task 6: `rwd config` 구현
+### Task 6: Implement `rwd config`
 
 **Files:**
 - Modify: `src/config.rs`
 - Modify: `src/main.rs`
 
-- [ ] **Step 1: config.rs에 run_config() 함수 작성**
+- [ ] **Step 1: Write run_config() function in config.rs**
 
 ```rust
-/// rwd config <key> <value> — 개별 설정 값을 변경합니다.
-/// 기존 설정 파일을 읽고, 해당 키만 수정한 뒤 다시 저장합니다.
+/// rwd config <key> <value> — changes an individual config value.
+/// Reads the existing config file, modifies the specified key, and saves it back.
 pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     let config_file = config_path()?;
 
     if !config_file.exists() {
-        return Err("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.".into());
+        return Err("Config file not found. Please run `rwd init` first.".into());
     }
 
     let mut config = load_config(&config_file)?;
@@ -522,24 +522,24 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     match key {
         "output-path" => {
             config.output.path = value.to_string();
-            println!("출력 경로 변경: {value}");
+            println!("Output path changed: {value}");
         }
         "provider" => {
             if !["anthropic", "openai"].contains(&value) {
                 return Err(format!(
-                    "지원하지 않는 프로바이더: '{value}'. 사용 가능: anthropic, openai"
+                    "Unsupported provider: '{value}'. Available: anthropic, openai"
                 ).into());
             }
             config.llm.provider = value.to_string();
-            println!("LLM 프로바이더 변경: {value}");
+            println!("LLM provider changed: {value}");
         }
         "api-key" => {
             config.llm.api_key = value.to_string();
-            println!("API 키 변경 완료");
+            println!("API key updated");
         }
         _ => {
             return Err(format!(
-                "알 수 없는 설정 키: '{key}'. 사용 가능: output-path, provider, api-key"
+                "Unknown config key: '{key}'. Available: output-path, provider, api-key"
             ).into());
         }
     }
@@ -549,41 +549,41 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
 }
 ```
 
-- [ ] **Step 2: main.rs에서 Config 핸들러 연결**
+- [ ] **Step 2: Connect Config handler in main.rs**
 
-placeholder를 교체:
+Replace placeholder:
 ```rust
 Commands::Config { key, value } => {
     if let Err(e) = config::run_config(&key, &value) {
-        eprintln!("설정 변경 실패: {e}");
+        eprintln!("Config change failed: {e}");
         std::process::exit(1);
     }
 }
 ```
 
-- [ ] **Step 3: cargo build 확인**
+- [ ] **Step 3: Run cargo build**
 
 Run: `cargo build`
-Expected: 성공
+Expected: success
 
-- [ ] **Step 4: 실제 실행 테스트 (수동)**
+- [ ] **Step 4: Manual run test**
 
 Run: `cargo run -- config output-path /tmp/test/Daily`
-Expected: "출력 경로 변경: /tmp/test/Daily" 출력
+Expected: "Output path changed: /tmp/test/Daily" output
 
 Run: `cat ~/.config/rwd/config.toml`
-Expected: output.path 값이 변경됨
+Expected: output.path value changed
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/config.rs src/main.rs
-git commit -m "feat: rwd config 구현 — output-path, provider, api-key 변경 지원"
+git commit -m "feat: implement rwd config — output-path, provider, api-key changes"
 ```
 
 ---
 
-### Task 7: 기존 모듈을 config 기반으로 전환
+### Task 7: Migrate existing modules to config-based
 
 **Files:**
 - Modify: `src/analyzer/provider.rs`
@@ -591,14 +591,14 @@ git commit -m "feat: rwd config 구현 — output-path, provider, api-key 변경
 - Modify: `src/main.rs`
 - Modify: `src/config.rs`
 
-이 태스크는 기존 `.env` 기반 로직을 `config.toml` 기반으로 전환합니다.
-**전환 전략**: config 파일이 있으면 config에서 읽고, 없으면 기존 `.env` fallback (하위 호환성 유지).
+This task migrates the existing `.env`-based logic to `config.toml`-based.
+**Migration strategy**: read from config file if present, otherwise fall back to existing `.env` (backward compatibility).
 
-- [ ] **Step 1: config.rs에 load_or_default() 함수 추가**
+- [ ] **Step 1: Add load_or_default() function to config.rs**
 
 ```rust
-/// 설정 파일을 읽습니다. 파일이 없으면 None을 반환합니다.
-/// 호출부에서 None일 때 기존 .env fallback을 사용합니다.
+/// Reads the config file. Returns None if the file doesn't exist.
+/// The caller uses existing .env fallback when None.
 pub fn load_config_if_exists() -> Option<Config> {
     let path = config_path().ok()?;
     if path.exists() {
@@ -609,12 +609,12 @@ pub fn load_config_if_exists() -> Option<Config> {
 }
 ```
 
-- [ ] **Step 2: analyzer/provider.rs의 load_provider() 수정**
+- [ ] **Step 2: Modify load_provider() in analyzer/provider.rs**
 
-`load_provider()` 함수 시작 부분에 config 우선 로직 추가:
+Add config-first logic at the beginning of `load_provider()`:
 ```rust
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
-    // config.toml이 있으면 우선 사용
+    // Use config.toml if available
     if let Some(config) = crate::config::load_config_if_exists() {
         let provider = match config.llm.provider.as_str() {
             "openai" => LlmProvider::OpenAi,
@@ -623,19 +623,19 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
         return Ok((provider, config.llm.api_key));
     }
 
-    // fallback: 기존 .env 방식
+    // Fallback: existing .env approach
     dotenvy::dotenv().ok();
-    // ... 기존 코드 유지 ...
+    // ... existing code remains ...
 }
 ```
 
-- [ ] **Step 3: output/mod.rs의 load_vault_path() 수정**
+- [ ] **Step 3: Modify load_vault_path() in output/mod.rs**
 
-`load_vault_path()` 함수에 config 우선 로직 추가.
-`config.output.path`는 vault root 경로를 저장합니다 (Daily/는 save_to_vault()가 붙임):
+Add config-first logic to `load_vault_path()`.
+`config.output.path` stores the vault root path (Daily/ is appended by save_to_vault()):
 ```rust
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
-    // config.toml이 있으면 우선 사용
+    // Use config.toml if available
     if let Some(config) = crate::config::load_config_if_exists() {
         let path = PathBuf::from(&config.output.path);
         if !path.exists() {
@@ -644,102 +644,101 @@ pub fn load_vault_path() -> Result<PathBuf, OutputError> {
         return Ok(path);
     }
 
-    // fallback: 기존 .env 방식
+    // Fallback: existing .env approach
     dotenvy::dotenv().ok();
-    // ... 기존 코드 유지 ...
+    // ... existing code remains ...
 }
 ```
 
-- [ ] **Step 4: cargo build 확인**
+- [ ] **Step 4: Run cargo build**
 
 Run: `cargo build`
-Expected: 성공
+Expected: success
 
-- [ ] **Step 5: cargo clippy && cargo test 확인**
+- [ ] **Step 5: Run cargo clippy && cargo test**
 
 Run: `cargo clippy && cargo test`
-Expected: 경고 0, 테스트 전체 통과
+Expected: 0 warnings, all tests pass
 
-- [ ] **Step 6: 실제 동작 테스트 (수동)**
+- [ ] **Step 6: Manual test**
 
-기존 .env로 동작 확인:
+Verify with existing .env:
 Run: `cargo run -- today`
-Expected: 이전과 동일하게 동작
+Expected: works the same as before
 
-config.toml로 동작 확인:
-1. `cargo run -- init` 으로 설정 생성
-2. `.env` 파일을 임시 이름으로 변경 (`mv .env .env.bak`)
-3. `cargo run -- today` 실행
-4. config.toml 기반으로 정상 동작하는지 확인
-5. `.env` 파일 복원 (`mv .env.bak .env`)
+Verify with config.toml:
+1. Create config with `cargo run -- init`
+2. Temporarily rename `.env` (`mv .env .env.bak`)
+3. Run `cargo run -- today`
+4. Verify it works correctly using config.toml
+5. Restore `.env` (`mv .env.bak .env`)
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/config.rs src/analyzer/provider.rs src/output/mod.rs
-git commit -m "feat: config.toml 기반으로 전환 — .env fallback 유지"
+git commit -m "feat: switch to config.toml-based — .env fallback preserved"
 ```
 
 ---
 
-## Chunk 3: 정리 및 마무리
+## Chunk 3: Cleanup and Finalization
 
-### Task 8: rwd init 시 기존 .env 마이그레이션 안내
+### Task 8: Migration notice when running rwd init with existing .env
 
-> Task 9(dotenvy 제거)보다 먼저 진행합니다 — 사용자가 init을 통해 마이그레이션한 뒤 .env를 제거해야 합니다.
+> Proceed before Task 9 (dotenvy removal) — users need to migrate via init before .env is removed.
 
 **Files:**
 - Modify: `src/config.rs`
 
-- [ ] **Step 1: run_init()에 .env 감지 로직 추가**
+- [ ] **Step 1: Add .env detection logic to run_init()**
 
-`run_init()` 함수 시작 부분에 추가:
+Add at the beginning of `run_init()`:
 ```rust
-// 기존 .env 파일이 있으면 마이그레이션 안내
+// Notify if existing .env file is detected
 let cwd_env = std::path::Path::new(".env");
 if cwd_env.exists() {
-    eprintln!("기존 .env 파일이 감지되었습니다.");
-    eprintln!("rwd init 완료 후 .env 파일은 더 이상 사용되지 않습니다.");
-    eprintln!("설정은 ~/.config/rwd/config.toml에서 관리됩니다.\n");
+    eprintln!("Existing .env file detected.");
+    eprintln!("After completing rwd init, the .env file will no longer be used.");
+    eprintln!("Configuration is now managed at ~/.config/rwd/config.toml.\n");
 }
 ```
 
-- [ ] **Step 2: cargo build 확인**
+- [ ] **Step 2: Run cargo build**
 
 Run: `cargo build`
-Expected: 성공
+Expected: success
 
-- [ ] **Step 3: 커밋**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/config.rs
-git commit -m "feat: rwd init 시 기존 .env 파일 마이그레이션 안내 메시지 추가"
+git commit -m "feat: add .env migration notice message during rwd init"
 ```
 
 ---
 
-### Task 9: .env fallback 제거 및 dotenvy 의존성 정리
+### Task 9: Remove .env fallback and dotenvy dependency
 
-> Task 8(마이그레이션 안내)이 완료된 뒤 진행합니다.
+> Proceed after Task 8 (migration notice) is complete.
 
 **Files:**
 - Modify: `src/analyzer/provider.rs`
 - Modify: `src/output/mod.rs`
 - Modify: `Cargo.toml`
 
-- [ ] **Step 1: provider.rs에서 .env fallback 코드 제거**
+- [ ] **Step 1: Remove .env fallback code from provider.rs**
 
-`load_provider()`에서 `dotenvy::dotenv()` 및 `std::env::var()` 기반 코드를 제거하고, config 전용으로 변경.
-`.env` 파일이 남아있는 사용자를 위해 에러 메시지에 마이그레이션 힌트 포함:
+Change `load_provider()` to config-only. Include migration hint in error message for users who still have .env:
 ```rust
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
     let config = crate::config::load_config_if_exists().ok_or_else(|| {
         let hint = if std::path::Path::new(".env").exists() {
-            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+            " (existing .env users: run `rwd init` to migrate your config)"
         } else {
             ""
         };
-        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
+        format!("Config file not found. Please run `rwd init` first.{hint}")
     })?;
 
     let provider = match config.llm.provider.as_str() {
@@ -750,18 +749,18 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
 }
 ```
 
-- [ ] **Step 2: output/mod.rs에서 .env fallback 코드 제거**
+- [ ] **Step 2: Remove .env fallback code from output/mod.rs**
 
-`load_vault_path()`를 config 전용으로 변경:
+Change `load_vault_path()` to config-only:
 ```rust
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
     let config = crate::config::load_config_if_exists().ok_or_else(|| {
         let hint = if std::path::Path::new(".env").exists() {
-            " (기존 .env 사용자: `rwd init`으로 설정을 마이그레이션하세요)"
+            " (existing .env users: run `rwd init` to migrate your config)"
         } else {
             ""
         };
-        format!("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.{hint}")
+        format!("Config file not found. Please run `rwd init` first.{hint}")
     })?;
 
     let path = PathBuf::from(&config.output.path);
@@ -772,35 +771,35 @@ pub fn load_vault_path() -> Result<PathBuf, OutputError> {
 }
 ```
 
-- [ ] **Step 3: Cargo.toml에서 dotenvy 제거**
+- [ ] **Step 3: Remove dotenvy from Cargo.toml**
 
-`dotenvy = "0.15"` 줄 삭제.
+Delete the `dotenvy = "0.15"` line.
 
-- [ ] **Step 4: cargo build — dotenvy 참조 남아있으면 제거**
+- [ ] **Step 4: Build — remove any remaining dotenvy references**
 
 Run: `cargo build`
-Expected: 성공 (dotenvy import 남아있으면 컴파일 에러로 알려줌)
+Expected: success (any remaining dotenvy imports will cause compile errors)
 
-- [ ] **Step 5: cargo clippy && cargo test 확인**
+- [ ] **Step 5: Run cargo clippy && cargo test**
 
 Run: `cargo clippy && cargo test`
-Expected: 경고 0, 테스트 전체 통과
+Expected: 0 warnings, all tests pass
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add Cargo.toml src/analyzer/provider.rs src/output/mod.rs
-git commit -m "refactor: .env/dotenvy 제거 — config.toml 단일 소스로 전환"
+git commit -m "refactor: remove .env/dotenvy — switch to config.toml as single source"
 ```
 
 ---
 
-## 완료 조건 체크리스트
+## Completion Checklist
 
-- [ ] `rwd init` — API 키 입력, Obsidian vault 자동 감지, `~/.config/rwd/config.toml` 생성
-- [ ] `rwd config output-path <경로>` — 출력 경로 변경
-- [ ] `rwd config provider <이름>` — LLM 프로바이더 변경
-- [ ] `rwd config api-key <키>` — API 키 변경
-- [ ] `rwd today` — config.toml 기반으로 정상 동작
-- [ ] `.env` 및 `dotenvy` 의존성 완전 제거
-- [ ] `cargo build`, `cargo clippy`, `cargo test` 전체 통과
+- [ ] `rwd init` — API key input, Obsidian vault auto-detection, `~/.config/rwd/config.toml` creation
+- [ ] `rwd config output-path <path>` — change output path
+- [ ] `rwd config provider <name>` — change LLM provider
+- [ ] `rwd config api-key <key>` — change API key
+- [ ] `rwd today` — works correctly based on config.toml
+- [ ] `.env` and `dotenvy` dependency fully removed
+- [ ] `cargo build`, `cargo clippy`, `cargo test` all pass

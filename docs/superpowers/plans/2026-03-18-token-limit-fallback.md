@@ -1,10 +1,10 @@
-# 토큰 제한 fallback 구현 계획
+# Token Limit Fallback Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Claude Code 분석 시 LLM 토큰 제한 에러가 발생하면 세션별 개별 분석으로 자동 fallback하고, 429 에러는 친절한 안내 메시지를 출력한다.
+**Goal:** When LLM token limit errors occur during Claude Code analysis, automatically fall back to per-session analysis for 400 errors, and display a friendly error message for 429 errors.
 
-**Architecture:** `analyze_entries()`에서 API 호출 실패 시 에러 메시지를 검사하여 400(컨텍스트 초과)이면 세션별 분할 분석, 429(TPM)이면 안내 메시지를 반환한다. 세션별 분석은 기존 `build_prompt()`를 재사용하고 결과를 병합한다.
+**Architecture:** When API call fails inside `analyze_entries()`, inspect the error message — 400 (context overflow) triggers per-session split analysis, 429 (TPM) returns a guidance message. Per-session analysis reuses existing `build_prompt()` and merges results.
 
 **Tech Stack:** Rust, serde_json
 
@@ -12,26 +12,26 @@
 
 ---
 
-## Chunk 1: 에러 판별 + 결과 병합 + 세션 ID 추출 + fallback 로직
+## Chunk 1: Error Detection + Result Merging + Session ID Extraction + Fallback Logic
 
-### 파일 구조
+### File Structure
 
-| 파일 | 변경 | 역할 |
-|------|------|------|
-| `src/analyzer/mod.rs` | 수정 | `analyze_entries()` fallback 로직, 에러 판별 함수 |
-| `src/analyzer/prompt.rs` | 수정 | `extract_session_ids()` 추가 |
-| `src/analyzer/insight.rs` | 수정 | `merge_results()` 추가 |
+| File | Change | Role |
+|------|--------|------|
+| `src/analyzer/mod.rs` | Modify | `analyze_entries()` fallback logic, error detection functions |
+| `src/analyzer/prompt.rs` | Modify | Add `extract_session_ids()` |
+| `src/analyzer/insight.rs` | Modify | Add `merge_results()` |
 
 ---
 
-### Task 1: 에러 판별 함수 테스트 및 구현
+### Task 1: Error detection function tests and implementation
 
 **Files:**
 - Modify: `src/analyzer/mod.rs`
 
-- [ ] **Step 1: 에러 판별 테스트 작성**
+- [ ] **Step 1: Write error detection tests**
 
-`src/analyzer/mod.rs` 끝에 테스트 모듈 추가:
+Add a test module at the end of `src/analyzer/mod.rs`:
 
 ```rust
 #[cfg(test)]
@@ -39,97 +39,97 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_is_context_limit_error_400_token_포함시_true() {
-        let err = "API 요청 실패 (400 Bad Request): {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens\"}}";
+    fn test_is_context_limit_error_true_for_400_with_token() {
+        let err = "API request failed (400 Bad Request): {\"error\":{\"message\":\"This model's maximum context length is 128000 tokens\"}}";
         assert!(is_context_limit_error(err));
     }
 
     #[test]
-    fn test_is_context_limit_error_400_context_포함시_true() {
-        let err = "OpenAI API 요청 실패 (400 Bad Request): {\"error\":{\"code\":\"context_length_exceeded\"}}";
+    fn test_is_context_limit_error_true_for_400_with_context() {
+        let err = "OpenAI API request failed (400 Bad Request): {\"error\":{\"code\":\"context_length_exceeded\"}}";
         assert!(is_context_limit_error(err));
     }
 
     #[test]
-    fn test_is_context_limit_error_429_에러는_false() {
-        let err = "OpenAI API 요청 실패 (429 Too Many Requests): rate limit";
+    fn test_is_context_limit_error_false_for_429() {
+        let err = "OpenAI API request failed (429 Too Many Requests): rate limit";
         assert!(!is_context_limit_error(err));
     }
 
     #[test]
-    fn test_is_context_limit_error_일반_에러는_false() {
-        let err = "API 요청 실패 (500 Internal Server Error): server error";
+    fn test_is_context_limit_error_false_for_general_error() {
+        let err = "API request failed (500 Internal Server Error): server error";
         assert!(!is_context_limit_error(err));
     }
 
     #[test]
-    fn test_is_rate_limit_error_429_포함시_true() {
-        let err = "OpenAI API 요청 실패 (429 Too Many Requests): {\"error\":{\"message\":\"Rate limit exceeded\"}}";
+    fn test_is_rate_limit_error_true_for_429() {
+        let err = "OpenAI API request failed (429 Too Many Requests): {\"error\":{\"message\":\"Rate limit exceeded\"}}";
         assert!(is_rate_limit_error(err));
     }
 
     #[test]
-    fn test_is_rate_limit_error_400_에러는_false() {
-        let err = "API 요청 실패 (400 Bad Request): token limit";
+    fn test_is_rate_limit_error_false_for_400() {
+        let err = "API request failed (400 Bad Request): token limit";
         assert!(!is_rate_limit_error(err));
     }
 }
 ```
 
-- [ ] **Step 2: 테스트 실패 확인**
+- [ ] **Step 2: Verify test failure**
 
 Run: `cargo test -p rwd test_is_context_limit -- --nocapture`
-Expected: 컴파일 에러 — 함수가 없음
+Expected: compile error — functions don't exist
 
-- [ ] **Step 3: 에러 판별 함수 구현**
+- [ ] **Step 3: Implement error detection functions**
 
-`src/analyzer/mod.rs`에서 `analyze_codex_entries` 함수 아래에 추가:
+Add below the `analyze_codex_entries` function in `src/analyzer/mod.rs`:
 
 ```rust
-/// API 에러가 컨텍스트 윈도우 초과(400)인지 판별합니다.
-/// 에러 메시지에 "400"과 ("token" 또는 "context")가 포함되면 컨텍스트 제한 에러로 판단합니다.
-/// 주의: 에러 메시지 형식에 의존하므로, M5에서 구조화된 에러 타입으로 전환 예정.
+/// Determines if an API error is a context window overflow (400).
+/// Checks if the error message contains "400" and ("token" or "context").
+/// Note: relies on error message format — will be migrated to structured error types in M5.
 fn is_context_limit_error(err_msg: &str) -> bool {
     let lower = err_msg.to_lowercase();
     lower.contains("400") && (lower.contains("token") || lower.contains("context"))
 }
 
-/// API 에러가 TPM/RPM 제한 초과(429)인지 판별합니다.
+/// Determines if an API error is a TPM/RPM limit exceeded (429).
 fn is_rate_limit_error(err_msg: &str) -> bool {
     err_msg.contains("429")
 }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Verify tests pass**
 
 Run: `cargo test -p rwd test_is_context_limit -- --nocapture && cargo test -p rwd test_is_rate_limit -- --nocapture`
-Expected: 6개 테스트 모두 PASS
+Expected: all 6 tests PASS
 
-- [ ] **Step 5: 커밋**
+- [ ] **Step 5: Commit**
 
 ```bash
 git add src/analyzer/mod.rs
-git commit -m "feat: 토큰 제한 에러 판별 함수 추가 (#36)"
+git commit -m "feat: add token limit error detection functions (#36)"
 ```
 
 ---
 
-### Task 2: merge_results 테스트 및 구현
+### Task 2: merge_results test and implementation
 
 **Files:**
 - Modify: `src/analyzer/insight.rs`
 
-- [ ] **Step 1: merge_results 테스트 작성**
+- [ ] **Step 1: Write merge_results tests**
 
-`src/analyzer/insight.rs`의 `mod tests` 블록에 추가:
+Add to the `mod tests` block in `src/analyzer/insight.rs`:
 
 ```rust
     #[test]
-    fn test_merge_results_여러_결과_병합() {
+    fn test_merge_results_combines_multiple_results() {
         let r1 = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "s1".to_string(),
-                work_summary: "작업1".to_string(),
+                work_summary: "work1".to_string(),
                 decisions: vec![],
                 curiosities: vec![],
                 corrections: vec![],
@@ -139,7 +139,7 @@ git commit -m "feat: 토큰 제한 에러 판별 함수 추가 (#36)"
         let r2 = AnalysisResult {
             sessions: vec![SessionInsight {
                 session_id: "s2".to_string(),
-                work_summary: "작업2".to_string(),
+                work_summary: "work2".to_string(),
                 decisions: vec![],
                 curiosities: vec![],
                 corrections: vec![],
@@ -153,25 +153,25 @@ git commit -m "feat: 토큰 제한 에러 판별 함수 추가 (#36)"
     }
 
     #[test]
-    fn test_merge_results_빈_벡터_빈_결과() {
+    fn test_merge_results_empty_vec_returns_empty_result() {
         let merged = merge_results(vec![]);
         assert!(merged.sessions.is_empty());
     }
 ```
 
-- [ ] **Step 2: 테스트 실패 확인**
+- [ ] **Step 2: Verify test failure**
 
 Run: `cargo test -p rwd test_merge_results -- --nocapture`
-Expected: 컴파일 에러 — 함수가 없음
+Expected: compile error — function doesn't exist
 
-- [ ] **Step 3: merge_results 구현**
+- [ ] **Step 3: Implement merge_results**
 
-`src/analyzer/insight.rs`에서 `parse_response` 함수 아래에 추가:
+Add below the `parse_response` function in `src/analyzer/insight.rs`:
 
 ```rust
-/// 여러 AnalysisResult를 하나로 병합합니다.
-/// 각 결과의 sessions Vec을 순서대로 합칩니다.
-/// fallback 시 세션별 개별 분석 결과를 하나의 결과로 조합하기 위해 사용합니다.
+/// Merges multiple AnalysisResults into one.
+/// Combines the sessions Vec from each result in order.
+/// Used to compose a single result from per-session fallback analysis.
 pub fn merge_results(results: Vec<AnalysisResult>) -> AnalysisResult {
     let sessions = results
         .into_iter()
@@ -181,84 +181,84 @@ pub fn merge_results(results: Vec<AnalysisResult>) -> AnalysisResult {
 }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Verify tests pass**
 
 Run: `cargo test -p rwd test_merge_results -- --nocapture`
-Expected: 2개 테스트 모두 PASS
+Expected: both tests PASS
 
-- [ ] **Step 5: 모듈 주석 업데이트**
+- [ ] **Step 5: Update module comment**
 
-`src/analyzer/insight.rs` 1행의 주석을 변경:
+Change line 1 comment of `src/analyzer/insight.rs`:
 
 ```rust
-// LLM API 응답을 구조화된 인사이트 타입으로 파싱하고, 분할 분석 결과를 병합하는 모듈.
+// Module for parsing LLM API responses into structured insight types and merging split analysis results.
 ```
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/analyzer/insight.rs
-git commit -m "feat: merge_results 결과 병합 함수 추가 (#36)"
+git commit -m "feat: add merge_results function for result combining (#36)"
 ```
 
 ---
 
-### Task 3: LogEntry에 Clone derive 추가 (준비 작업)
+### Task 3: Add Clone derive to LogEntry (preparation)
 
 **Files:**
 - Modify: `src/parser/claude.rs`
 
-- [ ] **Step 1: Clone derive 추가**
+- [ ] **Step 1: Add Clone derive**
 
-`src/parser/claude.rs`에서 아래 타입들에 `Clone`을 추가합니다 (기존 `Debug, Deserialize` 옆에):
+Add `Clone` to the following types in `src/parser/claude.rs` (alongside existing `Debug, Deserialize`):
 
-- `LogEntry` (enum, 29행)
-- `UserEntry` (45행)
-- `AssistantEntry` (58행)
-- `AssistantMessage` (68행 부근)
+- `LogEntry` (enum, line 29)
+- `UserEntry` (line 45)
+- `AssistantEntry` (line 58)
+- `AssistantMessage` (around line 68)
 - `ContentBlock` (enum)
 - `Usage` (struct)
 - `ProgressEntry`
 - `SystemEntry`
 - `FileHistorySnapshotEntry`
 
-`serde_json::Value`와 `String`, `DateTime<Utc>` 등 기본 타입은 이미 `Clone`을 구현하고 있으므로, derive만 추가하면 됩니다.
+`serde_json::Value`, `String`, `DateTime<Utc>` and other base types already implement `Clone`, so just adding the derive is sufficient.
 
-- [ ] **Step 2: 빌드 확인**
+- [ ] **Step 2: Verify build**
 
 Run: `cargo build`
-Expected: 컴파일 성공
+Expected: compilation success
 
-- [ ] **Step 3: 커밋**
+- [ ] **Step 3: Commit**
 
 ```bash
 git add src/parser/claude.rs
-git commit -m "chore: LogEntry 관련 타입에 Clone derive 추가 (#36)"
+git commit -m "chore: add Clone derive to LogEntry related types (#36)"
 ```
 
 ---
 
-### Task 4: extract_session_ids 테스트 및 구현 (구 Task 3)
+### Task 4: extract_session_ids test and implementation (formerly Task 3)
 
 **Files:**
 - Modify: `src/analyzer/prompt.rs`
 
-- [ ] **Step 1: extract_session_ids 테스트 작성**
+- [ ] **Step 1: Write extract_session_ids tests**
 
-`src/analyzer/prompt.rs`의 `mod tests` 블록에 추가:
+Add to the `mod tests` block in `src/analyzer/prompt.rs`:
 
 ```rust
     #[test]
-    fn test_extract_session_ids_중복_제거_순서_유지() {
+    fn test_extract_session_ids_deduplicates_preserving_order() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
-                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"첫번째"}}"#,
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"first"}}"#,
             ).unwrap(),
             serde_json::from_str::<LogEntry>(
-                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"두번째"}}"#,
+                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"second"}}"#,
             ).unwrap(),
             serde_json::from_str::<LogEntry>(
-                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T12:00:00Z","uuid":"u3","message":{"role":"user","content":"세번째"}}"#,
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T12:00:00Z","uuid":"u3","message":{"role":"user","content":"third"}}"#,
             ).unwrap(),
         ];
         let ids = extract_session_ids(&entries);
@@ -266,33 +266,33 @@ git commit -m "chore: LogEntry 관련 타입에 Clone derive 추가 (#36)"
     }
 
     #[test]
-    fn test_extract_session_ids_빈_엔트리_빈_결과() {
+    fn test_extract_session_ids_empty_entries_returns_empty() {
         let entries: Vec<LogEntry> = vec![];
         let ids = extract_session_ids(&entries);
         assert!(ids.is_empty());
     }
 ```
 
-- [ ] **Step 2: 테스트 실패 확인**
+- [ ] **Step 2: Verify test failure**
 
 Run: `cargo test -p rwd test_extract_session_ids -- --nocapture`
-Expected: 컴파일 에러 — 함수가 없음
+Expected: compile error — function doesn't exist
 
-- [ ] **Step 3: extract_session_ids 구현**
+- [ ] **Step 3: Implement extract_session_ids**
 
-`src/analyzer/prompt.rs`에서 `build_codex_prompt` 함수 아래에 추가:
+Add below the `build_codex_prompt` function in `src/analyzer/prompt.rs`:
 
 ```rust
-/// LogEntry 슬라이스에서 고유한 세션 ID 목록을 추출합니다.
-/// 등장 순서를 유지하며 중복을 제거합니다.
-/// fallback 시 세션별로 엔트리를 분할하기 위해 사용합니다.
+/// Extracts unique session IDs from a LogEntry slice.
+/// Preserves insertion order while removing duplicates.
+/// Used for splitting entries by session during fallback.
 pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
-        // User/Assistant/Progress는 session_id: String
-        // System은 session_id: Option<String>
-        // FileHistorySnapshot은 session_id 필드가 없음
+        // User/Assistant/Progress have session_id: String
+        // System has session_id: Option<String>
+        // FileHistorySnapshot has no session_id field
         let id = match entry {
             LogEntry::User(e) => Some(e.session_id.as_str()),
             LogEntry::Assistant(e) => Some(e.session_id.as_str()),
@@ -310,33 +310,33 @@ pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
 }
 ```
 
-- [ ] **Step 4: 테스트 통과 확인**
+- [ ] **Step 4: Verify tests pass**
 
 Run: `cargo test -p rwd test_extract_session_ids -- --nocapture`
-Expected: 2개 테스트 모두 PASS
+Expected: both tests PASS
 
-- [ ] **Step 5: clippy 확인**
+- [ ] **Step 5: Run clippy**
 
 Run: `cargo clippy`
-Expected: warning 0개
+Expected: 0 warnings
 
-- [ ] **Step 6: 커밋**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add src/analyzer/prompt.rs
-git commit -m "feat: extract_session_ids 세션 ID 추출 함수 추가 (#36)"
+git commit -m "feat: add extract_session_ids function (#36)"
 ```
 
 ---
 
-### Task 5: analyze_entries fallback 로직 구현
+### Task 5: Implement analyze_entries fallback logic
 
 **Files:**
 - Modify: `src/analyzer/mod.rs`
 
-- [ ] **Step 1: analyze_entries에 fallback 로직 추가**
+- [ ] **Step 1: Add fallback logic to analyze_entries**
 
-`src/analyzer/mod.rs`의 `analyze_entries()` 함수를 아래로 교체:
+Replace `analyze_entries()` in `src/analyzer/mod.rs` with:
 
 ```rust
 pub async fn analyze_entries(
@@ -359,20 +359,20 @@ pub async fn analyze_entries(
         Err(e) => {
             let err_msg = e.to_string();
 
-            // 429 TPM 제한 → 친절한 에러 메시지
+            // 429 TPM limit → friendly error message
             if is_rate_limit_error(&err_msg) {
                 return Err(
-                    "API 요청 빈도(TPM) 제한을 초과했습니다.\n\
-                     해결 방법:\n  \
-                     • rwd config provider anthropic  (Anthropic으로 전환)\n  \
-                     • LLM 프로바이더 플랜 업그레이드  (TPM 한도 증가)"
+                    "API request rate (TPM) limit exceeded.\n\
+                     Solutions:\n  \
+                     • rwd config provider anthropic  (switch to Anthropic)\n  \
+                     • Upgrade your LLM provider plan  (increase TPM limit)"
                         .into(),
                 );
             }
 
-            // 400 컨텍스트 제한 → 세션별 분할 fallback
+            // 400 context limit → per-session split fallback
             if is_context_limit_error(&err_msg) {
-                eprintln!("프롬프트가 토큰 제한을 초과하여 세션별 분석으로 전환합니다...");
+                eprintln!("Prompt exceeds token limit, switching to per-session analysis...");
                 return analyze_entries_by_session(
                     entries,
                     &provider,
@@ -382,20 +382,20 @@ pub async fn analyze_entries(
                 .await;
             }
 
-            // 기타 에러 → 그대로 전파
+            // Other errors → propagate as-is
             Err(e)
         }
     }
 }
 ```
 
-- [ ] **Step 2: analyze_entries_by_session 함수 구현**
+- [ ] **Step 2: Implement analyze_entries_by_session function**
 
-`analyze_entries` 함수 아래에 추가:
+Add below the `analyze_entries` function:
 
 ```rust
-/// 세션별로 엔트리를 분할하여 개별 분석 후 결과를 병합합니다.
-/// 400 컨텍스트 초과 에러 발생 시 fallback으로 호출됩니다.
+/// Splits entries by session for individual analysis and merges results.
+/// Called as a fallback when a 400 context overflow error occurs.
 async fn analyze_entries_by_session(
     entries: &[LogEntry],
     provider: &provider::LlmProvider,
@@ -408,10 +408,10 @@ async fn analyze_entries_by_session(
     let mut total_redact = RedactResult::empty();
 
     for (i, session_id) in session_ids.iter().enumerate() {
-        eprintln!("  세션 {}/{total} 분석 중... ({session_id})", i + 1);
+        eprintln!("  Analyzing session {}/{total}... ({session_id})", i + 1);
 
-        // 해당 세션의 엔트리만 필터링하여 새 Vec으로 수집합니다.
-        // clone이 필요한 이유: build_prompt()가 &[LogEntry]를 받으므로 소유권이 있는 Vec이 필요합니다.
+        // Filter entries for this session into a new Vec.
+        // clone is needed because build_prompt() takes &[LogEntry], requiring an owned Vec.
         let session_entries: Vec<LogEntry> = entries
             .iter()
             .filter(|e| entry_session_id(e) == Some(session_id.as_str()))
@@ -425,7 +425,7 @@ async fn analyze_entries_by_session(
         let prompt_text = match prompt::build_prompt(&session_entries) {
             Ok(p) => p,
             Err(e) => {
-                eprintln!("  세션 {session_id} 프롬프트 생성 실패: {e}");
+                eprintln!("  Session {session_id} prompt generation failed: {e}");
                 continue;
             }
         };
@@ -441,29 +441,29 @@ async fn analyze_entries_by_session(
             Ok(raw_response) => {
                 match insight::parse_response(&raw_response) {
                     Ok(result) => results.push(result),
-                    Err(e) => eprintln!("  세션 {session_id} 응답 파싱 실패: {e}"),
+                    Err(e) => eprintln!("  Session {session_id} response parsing failed: {e}"),
                 }
             }
             Err(e) => {
                 let err_msg = e.to_string();
                 if is_context_limit_error(&err_msg) || is_rate_limit_error(&err_msg) {
-                    eprintln!("  세션 {session_id} 분석 스킵 (토큰 제한 초과)");
+                    eprintln!("  Session {session_id} skipped (token limit exceeded)");
                 } else {
-                    eprintln!("  세션 {session_id} 분석 실패: {err_msg}");
+                    eprintln!("  Session {session_id} analysis failed: {err_msg}");
                 }
             }
         }
     }
 
     if results.is_empty() {
-        return Err("모든 세션의 분석에 실패했습니다.".into());
+        return Err("All session analyses failed.".into());
     }
 
     Ok((insight::merge_results(results), total_redact))
 }
 
-/// LogEntry에서 session_id를 추출합니다.
-/// SystemEntry는 Option<String>, FileHistorySnapshotEntry는 session_id 없음.
+/// Extracts the session_id from a LogEntry.
+/// SystemEntry has Option<String>, FileHistorySnapshotEntry has no session_id.
 fn entry_session_id(entry: &LogEntry) -> Option<&str> {
     match entry {
         LogEntry::User(e) => Some(&e.session_id),
@@ -475,24 +475,24 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
 }
 ```
 
-- [ ] **Step 4: 빌드 확인**
+- [ ] **Step 4: Verify build**
 
 Run: `cargo build`
-Expected: 컴파일 성공
+Expected: compilation success
 
-- [ ] **Step 5: 전체 테스트 확인**
+- [ ] **Step 5: Run full test suite**
 
 Run: `cargo test`
-Expected: 모든 테스트 PASS
+Expected: all tests PASS
 
-- [ ] **Step 6: clippy 확인**
+- [ ] **Step 6: Run clippy**
 
 Run: `cargo clippy`
-Expected: warning 0개
+Expected: 0 warnings
 
-- [ ] **Step 7: 커밋**
+- [ ] **Step 7: Commit**
 
 ```bash
 git add src/analyzer/mod.rs src/parser/claude.rs
-git commit -m "feat: analyze_entries 토큰 제한 fallback 구현 (#36)"
+git commit -m "feat: implement analyze_entries token limit fallback (#36)"
 ```

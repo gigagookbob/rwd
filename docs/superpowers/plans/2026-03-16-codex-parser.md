@@ -1,10 +1,10 @@
-# Codex 세션 파서 구현 계획
+# Codex Session Parser Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Codex CLI 세션 로그를 파싱하여 Claude Code와 동일한 인사이트 분석 파이프라인에 통합한다.
+**Goal:** Parse Codex CLI session logs and integrate them into the same insight analysis pipeline as Claude Code.
 
-**Architecture:** `parser::codex` 모듈을 `parser::claude`와 병렬로 추가한다. Codex JSONL은 nested payload 구조이므로 2단계 파싱(loose parse → structured enum 변환)을 사용한다. 분석기는 `analyze_codex_entries()` 별도 함수로 분기하고, 출력은 같은 날짜 파일 안에 에이전트별 섹션으로 분리한다.
+**Architecture:** Add a `parser::codex` module in parallel with `parser::claude`. Since Codex JSONL has a nested payload structure, two-stage parsing (loose parse → structured enum conversion) is used. The analyzer branches via a separate `analyze_codex_entries()` function, and output is organized into per-agent sections within the same date file.
 
 **Tech Stack:** Rust, serde, serde_json, chrono
 
@@ -12,38 +12,38 @@
 
 ## File Structure
 
-| 파일 | 변경 | 역할 |
-|------|------|------|
-| `src/parser/codex.rs` | 생성 | Codex JSONL 파싱, 엔트리 타입, 요약 |
-| `src/parser/mod.rs` | 수정 | `pub mod codex;` 추가 |
-| `src/analyzer/prompt.rs` | 수정 | `build_codex_prompt()` 추가 |
-| `src/analyzer/mod.rs` | 수정 | `analyze_codex_entries()` 추가 |
-| `src/output/markdown.rs` | 수정 | 멀티소스 섹션 렌더링 |
-| `src/output/mod.rs` | 수정 | `render_combined_markdown` re-export 추가 |
-| `src/main.rs` | 수정 | Codex 수집/분석 통합, 기존 `save_analysis` 제거 |
+| File | Change | Role |
+|------|--------|------|
+| `src/parser/codex.rs` | Create | Codex JSONL parsing, entry types, summary |
+| `src/parser/mod.rs` | Modify | Add `pub mod codex;` |
+| `src/analyzer/prompt.rs` | Modify | Add `build_codex_prompt()` |
+| `src/analyzer/mod.rs` | Modify | Add `analyze_codex_entries()` |
+| `src/output/markdown.rs` | Modify | Multi-source section rendering |
+| `src/output/mod.rs` | Modify | Add `render_combined_markdown` re-export |
+| `src/main.rs` | Modify | Codex collection/analysis integration, remove existing `save_analysis` |
 
-**동작 변경 사항:** Claude 디렉토리(`~/.claude/projects/`)가 없어도 에러로 중단하지 않고 빈 결과로 진행한다. Codex 전용 사용자도 지원하기 위함이다.
+**Behavior change:** Even if the Claude directory (`~/.claude/projects/`) doesn't exist, the program no longer aborts with an error — it proceeds with an empty result. This supports Codex-only users.
 
 ---
 
-## Chunk 1: parser::codex 모듈
+## Chunk 1: parser::codex Module
 
-### Task 1: Codex 엔트리 타입 정의 및 기본 파싱
+### Task 1: Codex entry type definition and basic parsing
 
 **Files:**
 - Create: `src/parser/codex.rs`
 - Modify: `src/parser/mod.rs`
 
-- [ ] **Step 1: `parser/mod.rs`에 codex 모듈 선언**
+- [ ] **Step 1: Add codex module declaration to `parser/mod.rs`**
 
 ```rust
-// src/parser/mod.rs — 기존 코드 끝에 추가
+// src/parser/mod.rs — append to existing code
 pub mod codex;
 ```
 
-- [ ] **Step 2: Codex 엔트리 타입 정의 — 테스트 먼저**
+- [ ] **Step 2: Define Codex entry types — test first**
 
-`src/parser/codex.rs` 파일 생성. 테스트부터 작성한다.
+Create `src/parser/codex.rs`. Write the test first.
 
 ```rust
 #[cfg(test)]
@@ -69,16 +69,16 @@ mod tests {
 - [ ] **Step 3: Run test to verify it fails**
 
 Run: `cargo test -p rwd parser::codex::tests::test_parse_session_meta_entry`
-Expected: FAIL — CodexRawEntry, CodexEntry 미정의
+Expected: FAIL — CodexRawEntry, CodexEntry not defined
 
-- [ ] **Step 4: 최소 타입 구현 — session_meta만**
+- [ ] **Step 4: Implement minimal types — session_meta only**
 
 ```rust
-// Codex CLI 세션 로그(.jsonl) 파서
+// Codex CLI session log (.jsonl) parser
 //
-// Codex JSONL은 Claude Code와 달리 nested payload 구조입니다.
-// 각 줄: {"timestamp": "...", "type": "...", "payload": {...}}
-// 2단계 파싱: CodexRawEntry(loose) → CodexEntry(structured)로 변환합니다.
+// Unlike Claude Code, Codex JSONL has a nested payload structure.
+// Each line: {"timestamp": "...", "type": "...", "payload": {...}}
+// Two-stage parsing: CodexRawEntry (loose) → CodexEntry (structured).
 
 #![allow(dead_code)]
 
@@ -87,10 +87,10 @@ use serde::Deserialize;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
 
-// === 1단계: Loose 파싱용 구조체 ===
+// === Stage 1: Loose parsing struct ===
 
-/// JSONL 한 줄을 느슨하게 파싱하는 구조체.
-/// payload를 serde_json::Value로 받아 2단계에서 타입별로 변환합니다.
+/// Loosely parses a single JSONL line.
+/// Receives payload as serde_json::Value for type-specific conversion in stage 2.
 #[derive(Debug, Deserialize)]
 pub struct CodexRawEntry {
     pub timestamp: DateTime<Utc>,
@@ -100,10 +100,10 @@ pub struct CodexRawEntry {
     pub payload: serde_json::Value,
 }
 
-// === 2단계: 구조화된 엔트리 ===
+// === Stage 2: Structured entries ===
 
-/// Codex 로그의 의미 있는 엔트리만 추출한 enum.
-/// Claude Code의 LogEntry와 대응하지만, Codex 고유 구조를 반영합니다.
+/// Enum of meaningful entries extracted from Codex logs.
+/// Corresponds to Claude Code's LogEntry but reflects Codex-specific structure.
 #[derive(Debug)]
 pub enum CodexEntry {
     SessionMeta {
@@ -128,8 +128,8 @@ pub enum CodexEntry {
 }
 
 impl CodexEntry {
-    /// CodexRawEntry를 구조화된 CodexEntry로 변환합니다.
-    /// payload의 내부 구조를 검사하여 적절한 variant를 선택합니다.
+    /// Converts a CodexRawEntry into a structured CodexEntry.
+    /// Inspects the payload structure to select the appropriate variant.
     pub fn from_raw(raw: &CodexRawEntry) -> Self {
         match raw.entry_type.as_str() {
             "session_meta" => {
@@ -163,12 +163,12 @@ impl CodexEntry {
 Run: `cargo test -p rwd parser::codex::tests::test_parse_session_meta_entry`
 Expected: PASS
 
-- [ ] **Step 6: user_message 파싱 테스트**
+- [ ] **Step 6: user_message parsing test**
 
 ```rust
 #[test]
 fn test_parse_user_message_from_event_msg() {
-    let json = r#"{"timestamp":"2026-03-11T03:28:22.019Z","type":"event_msg","payload":{"type":"user_message","message":"AGENTS.md 파일을 생성해줘"}}"#;
+    let json = r#"{"timestamp":"2026-03-11T03:28:22.019Z","type":"event_msg","payload":{"type":"user_message","message":"Create an AGENTS.md file"}}"#;
     let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
     let entry = CodexEntry::from_raw(&raw);
     assert!(matches!(entry, CodexEntry::UserMessage { .. }));
@@ -178,9 +178,9 @@ fn test_parse_user_message_from_event_msg() {
 }
 ```
 
-- [ ] **Step 7: from_raw에 event_msg → UserMessage 분기 추가**
+- [ ] **Step 7: Add event_msg → UserMessage branch to from_raw**
 
-`from_raw()` match에 추가:
+Add to the `from_raw()` match:
 
 ```rust
 "event_msg" => {
@@ -208,12 +208,12 @@ fn test_parse_user_message_from_event_msg() {
 Run: `cargo test -p rwd parser::codex::tests::test_parse_user_message`
 Expected: PASS
 
-- [ ] **Step 9: assistant message 파싱 테스트**
+- [ ] **Step 9: assistant message parsing test**
 
 ```rust
 #[test]
 fn test_parse_assistant_message_from_response_item() {
-    let json = r#"{"timestamp":"2026-03-11T03:28:29.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"README를 확인했습니다."}]}}"#;
+    let json = r#"{"timestamp":"2026-03-11T03:28:29.000Z","type":"response_item","payload":{"type":"message","role":"assistant","content":[{"type":"output_text","text":"Checked the README."}]}}"#;
     let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
     let entry = CodexEntry::from_raw(&raw);
     assert!(matches!(entry, CodexEntry::AssistantMessage { .. }));
@@ -223,7 +223,7 @@ fn test_parse_assistant_message_from_response_item() {
 }
 ```
 
-- [ ] **Step 10: from_raw에 response_item → AssistantMessage 분기 추가**
+- [ ] **Step 10: Add response_item → AssistantMessage branch to from_raw**
 
 ```rust
 "response_item" => {
@@ -260,10 +260,10 @@ fn test_parse_assistant_message_from_response_item() {
 }
 ```
 
-헬퍼 함수:
+Helper function:
 
 ```rust
-/// response_item payload의 content 배열에서 output_text를 추출합니다.
+/// Extracts output_text from a response_item payload's content array.
 fn extract_codex_output_text(payload: &serde_json::Value) -> String {
     let Some(content) = payload.get("content").and_then(|v| v.as_array()) else {
         return String::new();
@@ -281,7 +281,7 @@ fn extract_codex_output_text(payload: &serde_json::Value) -> String {
 }
 ```
 
-- [ ] **Step 11: function_call 파싱 테스트**
+- [ ] **Step 11: function_call parsing test**
 
 ```rust
 #[test]
@@ -296,7 +296,7 @@ fn test_parse_function_call_from_response_item() {
 }
 ```
 
-- [ ] **Step 12: unknown entry 내성 테스트**
+- [ ] **Step 12: unknown entry resilience test**
 
 ```rust
 #[test]
@@ -316,41 +316,41 @@ Expected: ALL PASS
 - [ ] **Step 14: cargo clippy**
 
 Run: `cargo clippy -p rwd`
-Expected: warning 0개
+Expected: 0 warnings
 
 - [ ] **Step 15: Commit**
 
 ```bash
 git add src/parser/codex.rs src/parser/mod.rs
-git commit -m "feat: parser::codex 엔트리 타입 정의 및 기본 파싱"
+git commit -m "feat: parser::codex entry type definitions and basic parsing"
 ```
 
 ---
 
-### Task 2: Codex 파일 탐색 및 JSONL 파싱
+### Task 2: Codex file discovery and JSONL parsing
 
 **Files:**
 - Modify: `src/parser/codex.rs`
 
-- [ ] **Step 1: discover_codex_sessions_dir 테스트**
+- [ ] **Step 1: discover_codex_sessions_dir test**
 
 ```rust
 #[test]
 fn test_discover_codex_sessions_dir_returns_path() {
-    // 실제 ~/.codex/sessions/ 존재 여부로 검증
+    // Verify based on whether ~/.codex/sessions/ actually exists
     let result = discover_codex_sessions_dir();
-    // CI 환경에서는 없을 수 있으므로 경로 형태만 확인
+    // May not exist in CI environments, so just check path format
     if let Ok(path) = result {
         assert!(path.ends_with("sessions"));
     }
 }
 ```
 
-- [ ] **Step 2: discover_codex_sessions_dir 구현**
+- [ ] **Step 2: Implement discover_codex_sessions_dir**
 
 ```rust
-/// ~/.codex/sessions/ 디렉토리 경로를 반환합니다.
-/// Codex는 세션을 YYYY/MM/DD/ 하위에 저장합니다.
+/// Returns the ~/.codex/sessions/ directory path.
+/// Codex stores sessions under YYYY/MM/DD/ subdirectories.
 pub fn discover_codex_sessions_dir() -> Result<PathBuf, super::ParseError> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
     let sessions_dir = home.join(".codex").join("sessions");
@@ -364,7 +364,7 @@ pub fn discover_codex_sessions_dir() -> Result<PathBuf, super::ParseError> {
 }
 ```
 
-- [ ] **Step 3: list_session_files_for_date 테스트**
+- [ ] **Step 3: list_session_files_for_date test**
 
 ```rust
 #[test]
@@ -381,17 +381,17 @@ fn test_list_session_files_for_date_with_temp_dir() {
     assert_eq!(files.len(), 1);
     assert!(files[0].extension().unwrap() == "jsonl");
 
-    // 정리
+    // Cleanup
     std::fs::remove_dir_all(&temp).ok();
 }
 ```
 
-- [ ] **Step 4: list_session_files_for_date 구현**
+- [ ] **Step 4: Implement list_session_files_for_date**
 
 ```rust
-/// 주어진 날짜에 해당하는 Codex 세션 파일들을 반환합니다.
-/// Codex는 ~/.codex/sessions/YYYY/MM/DD/ 구조로 저장하므로
-/// 디렉토리 경로로 날짜 필터링이 가능합니다.
+/// Returns Codex session files for the given date.
+/// Codex stores sessions in a ~/.codex/sessions/YYYY/MM/DD/ structure,
+/// so date filtering is done via directory path.
 pub fn list_session_files_for_date(
     sessions_dir: &Path,
     date: NaiveDate,
@@ -419,7 +419,7 @@ pub fn list_session_files_for_date(
 }
 ```
 
-- [ ] **Step 5: parse_codex_jsonl_file 테스트**
+- [ ] **Step 5: parse_codex_jsonl_file test**
 
 ```rust
 #[test]
@@ -445,11 +445,11 @@ fn test_parse_codex_jsonl_file_with_mixed_entries() {
 }
 ```
 
-- [ ] **Step 6: parse_codex_jsonl_file 구현**
+- [ ] **Step 6: Implement parse_codex_jsonl_file**
 
 ```rust
-/// Codex JSONL 파일을 읽어 CodexEntry 벡터로 변환합니다.
-/// Claude 파서와 동일한 패턴: 줄 단위로 읽고, 실패한 줄은 건너뜁니다.
+/// Reads a Codex JSONL file and converts it to a CodexEntry vector.
+/// Same pattern as the Claude parser: reads line by line, skips failed lines.
 pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::ParseError> {
     let file = std::fs::File::open(path)?;
     let reader = std::io::BufReader::new(file);
@@ -479,23 +479,23 @@ pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::Par
 - [ ] **Step 7: Run all tests + clippy**
 
 Run: `cargo test -p rwd parser::codex && cargo clippy -p rwd`
-Expected: ALL PASS, warning 0개
+Expected: ALL PASS, 0 warnings
 
 - [ ] **Step 8: Commit**
 
 ```bash
 git add src/parser/codex.rs
-git commit -m "feat: Codex 파일 탐색 및 JSONL 파싱 구현"
+git commit -m "feat: Codex file discovery and JSONL parsing implementation"
 ```
 
 ---
 
-### Task 3: Codex 세션 요약
+### Task 3: Codex session summary
 
 **Files:**
 - Modify: `src/parser/codex.rs`
 
-- [ ] **Step 1: CodexSessionSummary 테스트**
+- [ ] **Step 1: CodexSessionSummary test**
 
 ```rust
 #[test]
@@ -532,11 +532,11 @@ fn test_summarize_codex_entries_counts_correctly() {
 }
 ```
 
-- [ ] **Step 2: CodexSessionSummary 구현**
+- [ ] **Step 2: Implement CodexSessionSummary**
 
 ```rust
-/// Codex 세션의 요약 정보.
-/// Claude의 SessionSummary와 대응하지만, 토큰 정보 대신 cwd/model_provider를 포함합니다.
+/// Summary information for a Codex session.
+/// Corresponds to Claude's SessionSummary, but includes cwd/model_provider instead of token info.
 #[derive(Debug)]
 pub struct CodexSessionSummary {
     pub session_id: String,
@@ -547,8 +547,8 @@ pub struct CodexSessionSummary {
     pub function_call_count: usize,
 }
 
-/// Codex 엔트리들을 요약합니다.
-/// Codex는 파일 하나가 세션 하나이므로, SessionMeta에서 ID를 가져옵니다.
+/// Summarizes Codex entries.
+/// Since one file equals one session in Codex, the ID comes from SessionMeta.
 pub fn summarize_codex_entries(entries: &[CodexEntry]) -> CodexSessionSummary {
     let mut summary = CodexSessionSummary {
         session_id: String::new(),
@@ -587,19 +587,19 @@ Expected: ALL PASS
 
 ```bash
 git add src/parser/codex.rs
-git commit -m "feat: Codex 세션 요약(CodexSessionSummary) 구현"
+git commit -m "feat: Codex session summary (CodexSessionSummary) implementation"
 ```
 
 ---
 
-## Chunk 2: analyzer + output + main 통합
+## Chunk 2: Analyzer + Output + Main Integration
 
-### Task 4: Codex 프롬프트 빌더
+### Task 4: Codex prompt builder
 
 **Files:**
 - Modify: `src/analyzer/prompt.rs`
 
-- [ ] **Step 1: build_codex_prompt 테스트**
+- [ ] **Step 1: build_codex_prompt test**
 
 ```rust
 #[test]
@@ -607,16 +607,16 @@ fn test_build_codex_prompt_extracts_conversation() {
     let entries = vec![
         CodexEntry::UserMessage {
             timestamp: "2026-03-11T10:00:00Z".parse().unwrap(),
-            text: "프로젝트 구조를 알려줘".to_string(),
+            text: "Show me the project structure".to_string(),
         },
         CodexEntry::AssistantMessage {
             timestamp: "2026-03-11T10:00:30Z".parse().unwrap(),
-            text: "src/ 디렉토리를 확인했습니다".to_string(),
+            text: "Checked the src/ directory".to_string(),
         },
     ];
     let prompt = build_codex_prompt(&entries, "test-session").unwrap();
-    assert!(prompt.contains("[USER] 프로젝트 구조를 알려줘"));
-    assert!(prompt.contains("[ASSISTANT] src/ 디렉토리를 확인했습니다"));
+    assert!(prompt.contains("[USER] Show me the project structure"));
+    assert!(prompt.contains("[ASSISTANT] Checked the src/ directory"));
     assert!(prompt.contains("[Session: test-session]"));
 }
 
@@ -628,19 +628,19 @@ fn test_build_codex_prompt_empty_entries_returns_error() {
 }
 ```
 
-- [ ] **Step 2: build_codex_prompt 구현**
+- [ ] **Step 2: Implement build_codex_prompt**
 
-`src/analyzer/prompt.rs` 상단에 import 추가:
+Add import at the top of `src/analyzer/prompt.rs`:
 
 ```rust
 use crate::parser::codex::CodexEntry;
 ```
 
-함수 추가:
+Add function:
 
 ```rust
-/// Codex 엔트리들을 LLM 분석용 대화 텍스트로 변환합니다.
-/// Codex는 파일 하나가 세션 하나이므로, session_id를 외부에서 전달받습니다.
+/// Converts Codex entries into conversation text for LLM analysis.
+/// Since one file equals one session in Codex, the session_id is passed externally.
 pub fn build_codex_prompt(
     entries: &[CodexEntry],
     session_id: &str,
@@ -659,9 +659,9 @@ pub fn build_codex_prompt(
         }
     }
 
-    // 세션 헤더만 있고 대화 내용이 없는 경우
+    // If only the session header exists with no conversation content
     if !output.contains("[USER]") && !output.contains("[ASSISTANT]") {
-        return Err("Codex 로그에서 대화 내용을 찾을 수 없습니다.".into());
+        return Err("No conversation content found in Codex log.".into());
     }
 
     Ok(output)
@@ -677,23 +677,23 @@ Expected: ALL PASS
 
 ```bash
 git add src/analyzer/prompt.rs
-git commit -m "feat: Codex 대화 텍스트 프롬프트 빌더 추가"
+git commit -m "feat: add Codex conversation text prompt builder"
 ```
 
 ---
 
-### Task 5: analyze_codex_entries 함수
+### Task 5: analyze_codex_entries function
 
 **Files:**
 - Modify: `src/analyzer/mod.rs`
 
-- [ ] **Step 1: analyze_codex_entries 추가**
+- [ ] **Step 1: Add analyze_codex_entries**
 
 ```rust
 use crate::parser::codex::CodexEntry;
 
-/// Codex 세션의 엔트리들을 분석하여 인사이트를 추출합니다.
-/// Claude용 analyze_entries()와 동일한 파이프라인이지만, Codex용 프롬프트를 사용합니다.
+/// Analyzes Codex session entries to extract insights.
+/// Same pipeline as Claude's analyze_entries() but uses the Codex-specific prompt.
 pub async fn analyze_codex_entries(
     entries: &[CodexEntry],
     session_id: &str,
@@ -709,31 +709,31 @@ pub async fn analyze_codex_entries(
 - [ ] **Step 2: Run build + clippy**
 
 Run: `cargo build -p rwd && cargo clippy -p rwd`
-Expected: 성공, warning 0개
+Expected: success, 0 warnings
 
 - [ ] **Step 3: Commit**
 
 ```bash
 git add src/analyzer/mod.rs
-git commit -m "feat: analyze_codex_entries() 분석 함수 추가"
+git commit -m "feat: add analyze_codex_entries() analysis function"
 ```
 
 ---
 
-### Task 6: 멀티소스 Markdown 렌더링
+### Task 6: Multi-source Markdown rendering
 
 **Files:**
 - Modify: `src/output/markdown.rs`
 
-- [ ] **Step 1: render_combined_markdown 테스트**
+- [ ] **Step 1: render_combined_markdown test**
 
 ```rust
 #[test]
-fn test_render_combined_markdown_두소스_섹션_분리() {
+fn test_render_combined_markdown_separates_two_sources() {
     let claude = AnalysisResult {
         sessions: vec![SessionInsight {
             session_id: "c1".to_string(),
-            work_summary: "Claude 작업".to_string(),
+            work_summary: "Claude work".to_string(),
             decisions: vec![],
             curiosities: vec![],
             corrections: vec![],
@@ -742,7 +742,7 @@ fn test_render_combined_markdown_두소스_섹션_분리() {
     let codex = AnalysisResult {
         sessions: vec![SessionInsight {
             session_id: "x1".to_string(),
-            work_summary: "Codex 작업".to_string(),
+            work_summary: "Codex work".to_string(),
             decisions: vec![],
             curiosities: vec![],
             corrections: vec![],
@@ -757,16 +757,16 @@ fn test_render_combined_markdown_두소스_섹션_분리() {
 
     assert!(md.contains("## Claude Code"));
     assert!(md.contains("## Codex"));
-    assert!(md.contains("Claude 작업"));
-    assert!(md.contains("Codex 작업"));
+    assert!(md.contains("Claude work"));
+    assert!(md.contains("Codex work"));
 }
 
 #[test]
-fn test_render_combined_markdown_단일소스_정상동작() {
+fn test_render_combined_markdown_single_source_works() {
     let claude = AnalysisResult {
         sessions: vec![SessionInsight {
             session_id: "c1".to_string(),
-            work_summary: "Claude 작업".to_string(),
+            work_summary: "Claude work".to_string(),
             decisions: vec![],
             curiosities: vec![],
             corrections: vec![],
@@ -777,18 +777,18 @@ fn test_render_combined_markdown_단일소스_정상동작() {
     let md = render_combined_markdown(&sources, date);
 
     assert!(md.contains("## Claude Code"));
-    assert!(md.contains("Claude 작업"));
+    assert!(md.contains("Claude work"));
 }
 ```
 
-- [ ] **Step 2: render_combined_markdown 구현**
+- [ ] **Step 2: Implement render_combined_markdown**
 
 ```rust
-/// 여러 소스의 분석 결과를 하나의 Markdown으로 결합합니다.
-/// 각 소스는 ## 헤딩으로 구분됩니다.
+/// Combines analysis results from multiple sources into a single Markdown document.
+/// Each source is separated by a ## heading.
 ///
-/// sources: (소스 이름, 분석 결과) 튜플의 슬라이스.
-/// 향후 새로운 에이전트 추가 시 sources에 추가하면 됩니다.
+/// sources: slice of (source name, analysis result) tuples.
+/// When adding new agents in the future, just append to sources.
 pub fn render_combined_markdown(
     sources: &[(&str, &AnalysisResult)],
     date: NaiveDate,
@@ -810,9 +810,9 @@ pub fn render_combined_markdown(
 }
 ```
 
-- [ ] **Step 3: `output/mod.rs`에 re-export 추가**
+- [ ] **Step 3: Add re-export to `output/mod.rs`**
 
-`src/output/mod.rs`에 추가:
+Add to `src/output/mod.rs`:
 
 ```rust
 pub use markdown::render_combined_markdown;
@@ -821,41 +821,41 @@ pub use markdown::render_combined_markdown;
 - [ ] **Step 4: Run tests**
 
 Run: `cargo test -p rwd output::markdown`
-Expected: ALL PASS (기존 테스트 + 새 테스트)
+Expected: ALL PASS (existing + new tests)
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/output/markdown.rs src/output/mod.rs
-git commit -m "feat: 멀티소스 Markdown 렌더링(render_combined_markdown) 추가"
+git commit -m "feat: multi-source Markdown rendering (render_combined_markdown)"
 ```
 
 ---
 
-### Task 7: main.rs 통합
+### Task 7: main.rs integration
 
 **Files:**
 - Modify: `src/main.rs`
 
-- [ ] **Step 1: run_today()에 Codex 수집/분석 통합**
+- [ ] **Step 1: Integrate Codex collection/analysis into run_today()**
 
-`run_today()` 함수를 수정:
+Modify `run_today()`:
 
 ```rust
 async fn run_today() -> Result<(), parser::ParseError> {
     update::notify_if_update_available().await;
 
     if config::load_config_if_exists().is_none() {
-        eprintln!("설정 파일이 없습니다. 먼저 `rwd init`을 실행해 주세요.");
+        eprintln!("Config file not found. Please run `rwd init` first.");
         std::process::exit(1);
     }
 
     let today = chrono::Utc::now().date_naive();
 
-    // === Claude Code 로그 수집 ===
+    // === Collect Claude Code logs ===
     let claude_entries = collect_claude_entries(today);
 
-    // === Codex 로그 수집 ===
+    // === Collect Codex logs ===
     let codex_sessions = collect_codex_sessions(today);
 
     if claude_entries.is_empty() && codex_sessions.is_empty() {
@@ -863,7 +863,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
         return Ok(());
     }
 
-    // === Claude Code 요약 출력 ===
+    // === Claude Code summary output ===
     if !claude_entries.is_empty() {
         let summaries = parser::summarize_entries(&claude_entries);
         println!("\n=== Claude Code ({today}) ===");
@@ -873,7 +873,7 @@ async fn run_today() -> Result<(), parser::ParseError> {
         }
     }
 
-    // === Codex 요약 출력 ===
+    // === Codex summary output ===
     if !codex_sessions.is_empty() {
         println!("\n=== Codex ({today}) ===");
         println!("Sessions: {}", codex_sessions.len());
@@ -882,34 +882,34 @@ async fn run_today() -> Result<(), parser::ParseError> {
         }
     }
 
-    // === LLM 분석 ===
+    // === LLM Analysis ===
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
-    println!("\n{provider_label} API로 인사이트 분석 중...");
+    println!("\nAnalyzing insights with {provider_label} API...");
 
     let mut sources: Vec<(&str, analyzer::AnalysisResult)> = Vec::new();
 
-    // Claude 분석
+    // Claude analysis
     if !claude_entries.is_empty() {
         match analyzer::analyze_entries(&claude_entries).await {
             Ok(result) => sources.push(("Claude Code", result)),
-            Err(e) => eprintln!("Claude Code 분석 실패: {e}"),
+            Err(e) => eprintln!("Claude Code analysis failed: {e}"),
         }
     }
 
-    // Codex 분석 — 세션별로 개별 분석
+    // Codex analysis — individual per-session analysis
     for (summary, entries) in &codex_sessions {
         match analyzer::analyze_codex_entries(entries, &summary.session_id).await {
             Ok(result) => sources.push(("Codex", result)),
-            Err(e) => eprintln!("Codex 분석 실패 ({}): {e}", &summary.session_id[..8.min(summary.session_id.len())]),
+            Err(e) => eprintln!("Codex analysis failed ({}): {e}", &summary.session_id[..8.min(summary.session_id.len())]),
         }
     }
 
-    // 결과 출력 및 저장
+    // Output and save results
     if !sources.is_empty() {
         for (name, analysis) in &sources {
-            println!("\n=== {name} 인사이트 ===");
+            println!("\n=== {name} Insights ===");
             print_insights(analysis);
         }
         save_combined_analysis(&sources, today);
@@ -919,12 +919,12 @@ async fn run_today() -> Result<(), parser::ParseError> {
 }
 ```
 
-- [ ] **Step 2: 헬퍼 함수들 추가**
+- [ ] **Step 2: Add helper functions**
 
 ```rust
-/// Claude Code 로그를 수집합니다. 디렉토리가 없으면 빈 Vec을 반환합니다.
-/// 기존 run_today()는 디렉토리 부재 시 에러로 중단했지만,
-/// Codex 전용 사용자도 지원하기 위해 빈 결과로 진행합니다.
+/// Collects Claude Code logs. Returns empty Vec if directory doesn't exist.
+/// Previously run_today() would abort on missing directory,
+/// but now proceeds with empty results to support Codex-only users.
 fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEntry> {
     match parser::discover_log_dir() {
         Ok(dir) => println!("Scanning Claude Code: {}", dir.display()),
@@ -947,7 +947,7 @@ fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEn
     all_entries
 }
 
-/// Codex 세션 로그를 수집합니다. 디렉토리가 없으면 빈 Vec을 반환합니다.
+/// Collects Codex session logs. Returns empty Vec if directory doesn't exist.
 fn collect_codex_sessions(
     today: chrono::NaiveDate,
 ) -> Vec<(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)> {
@@ -968,7 +968,7 @@ fn collect_codex_sessions(
     for file in session_files {
         if let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) {
             let summary = parser::codex::summarize_codex_entries(&entries);
-            // 대화 내용이 있는 세션만 포함
+            // Only include sessions with conversation content
             if summary.user_count > 0 || summary.assistant_count > 0 {
                 sessions.push((summary, entries));
             }
@@ -1001,7 +1001,7 @@ fn print_codex_summary(s: &parser::codex::CodexSessionSummary) {
     println!("  Function calls:     {}", s.function_call_count);
 }
 
-/// 여러 소스의 분석 결과를 결합하여 Markdown으로 저장합니다.
+/// Combines analysis results from multiple sources and saves as Markdown.
 fn save_combined_analysis(
     sources: &[(&str, analyzer::AnalysisResult)],
     date: chrono::NaiveDate,
@@ -1009,12 +1009,12 @@ fn save_combined_analysis(
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
         Err(e) => {
-            eprintln!("Vault 경로 로드 실패: {e}");
+            eprintln!("Failed to load vault path: {e}");
             return;
         }
     };
 
-    // (&str, &AnalysisResult) 슬라이스로 변환
+    // Convert to (&str, &AnalysisResult) slice
     let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = sources
         .iter()
         .map(|(name, result)| (*name, result))
@@ -1023,63 +1023,63 @@ fn save_combined_analysis(
     let markdown = output::markdown::render_combined_markdown(&source_refs, date);
 
     match output::save_to_vault(&vault_path, date, &markdown) {
-        Ok(saved) => println!("\nMarkdown 저장 완료: {}", saved.display()),
-        Err(e) => eprintln!("파일 저장 실패: {e}"),
+        Ok(saved) => println!("\nMarkdown saved: {}", saved.display()),
+        Err(e) => eprintln!("File save failed: {e}"),
     }
 }
 ```
 
-- [ ] **Step 3: 기존 `save_analysis` 함수 및 `render_markdown` re-export 정리**
+- [ ] **Step 3: Clean up existing `save_analysis` function and `render_markdown` re-export**
 
-`src/main.rs`에서 기존 `save_analysis()` 함수를 삭제합니다 (save_combined_analysis로 대체됨).
-`src/output/mod.rs`에서 `pub use markdown::render_markdown;` 행을 삭제합니다 (render_combined_markdown으로 대체됨).
+Delete the existing `save_analysis()` function from `src/main.rs` (replaced by save_combined_analysis).
+Delete `pub use markdown::render_markdown;` from `src/output/mod.rs` (replaced by render_combined_markdown).
 
-> 참고: `render_markdown` 함수 자체는 `render_combined_markdown`이 내부적으로 사용하는 `render_session`, `render_til_section`과 같은 모듈에 있으므로 삭제하지 않습니다. 외부 re-export만 제거합니다.
+> Note: The `render_markdown` function itself is NOT deleted — it shares the module with `render_session` and `render_til_section` used internally by `render_combined_markdown`. Only the external re-export is removed.
 
 - [ ] **Step 4: Run build + all tests + clippy**
 
 Run: `cargo build -p rwd && cargo test -p rwd && cargo clippy -p rwd`
-Expected: ALL PASS, warning 0개
+Expected: ALL PASS, 0 warnings
 
 - [ ] **Step 5: Commit**
 
 ```bash
 git add src/main.rs src/output/mod.rs
-git commit -m "feat: Codex 세션 수집/분석을 run_today()에 통합"
+git commit -m "feat: integrate Codex session collection/analysis into run_today()"
 ```
 
 ---
 
-### Task 8: 문서 업데이트
+### Task 8: Documentation update
 
 **Files:**
 - Modify: `docs/ARCHITECTURE.md`
 
-- [ ] **Step 1: ARCHITECTURE.md에 Codex 소스 정보 업데이트**
+- [ ] **Step 1: Update ARCHITECTURE.md with Codex source info**
 
-기존 "Codex (추후 확장)" 부분을 실제 구현 내용으로 교체:
+Replace the existing "Codex (future expansion)" section with actual implementation details:
 
 ```markdown
 ### Codex
 
-- 로그 위치: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
-- 형식: 각 줄이 `{"timestamp", "type", "payload"}` 구조의 JSON 객체
-- 엔트리 타입: session_meta, response_item, event_msg, turn_context
-- 파서: 2단계 변환 (CodexRawEntry → CodexEntry)
+- Log location: `~/.codex/sessions/YYYY/MM/DD/rollout-*.jsonl`
+- Format: each line is a JSON object with `{"timestamp", "type", "payload"}` structure
+- Entry types: session_meta, response_item, event_msg, turn_context
+- Parser: two-stage conversion (CodexRawEntry → CodexEntry)
 ```
 
-프로젝트 구조에 추가:
+Add to the project structure:
 
 ```
 │   ├── parser/
 │   │   ├── mod.rs
-│   │   ├── claude.rs      # Claude Code 로그 파서
-│   │   └── codex.rs       # Codex 로그 파서
+│   │   ├── claude.rs      # Claude Code log parser
+│   │   └── codex.rs       # Codex log parser
 ```
 
 - [ ] **Step 2: Commit**
 
 ```bash
 git add docs/ARCHITECTURE.md
-git commit -m "docs: Codex 파서 아키텍처 문서 업데이트"
+git commit -m "docs: update architecture documentation for Codex parser"
 ```

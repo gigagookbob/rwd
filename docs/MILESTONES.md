@@ -1,39 +1,32 @@
 # Development Milestones — rwd
 
-아래 순서대로 단계적으로 구현한다. 각 마일스톤은 독립적으로 빌드/테스트 가능해야 한다.
+Each milestone is independently buildable and testable.
 
-## M1: CLI 뼈대
+## M1: CLI Skeleton
 
-- clap으로 기본 명령어 구조 정의
-- `rwd today`, `rwd --help` 등 기본 동작 확인
-- **학습 포인트**: cargo 프로젝트 구조, 의존성 관리, 기본 Rust 문법
+- Define basic command structure with clap
+- Verify `rwd today`, `rwd --help` work
 
-## M2: 로그 파일 탐색 및 파싱
+## M2: Log File Discovery & Parsing
 
-- Claude Code 로그 파일(JSONL) 위치 탐색
-- serde로 구조체 역직렬화
-- 유효하지 않은 로그 라인에 대한 에러 처리
-- **학습 포인트**: ownership, borrowing, struct, enum, Result/Option, serde, 에러 처리
+- Discover Claude Code log files (JSONL)
+- Deserialize with serde
+- Error handling for invalid log lines
 
-## M3: LLM API 연동
+## M3: LLM API Integration
 
-- 구조화된 데이터를 Claude API에 전달
-- 인사이트 응답 수신 및 파싱
-- API 키 관리 (환경 변수 또는 설정 파일)
-- **학습 포인트**: async/await, reqwest, tokio, API 통신, 환경 변수 처리
+- Send structured data to Claude API
+- Receive and parse insight responses
+- API key management (env vars or config file)
 
-## M4: Markdown 생성 및 저장
+## M4: Markdown Generation & Saving
 
-- 인사이트를 템플릿 기반 Markdown으로 변환
-- Obsidian vault 경로에 날짜별 파일 저장
-- **학습 포인트**: 파일 I/O, 문자열 포매팅, std::path, 날짜 처리
+- Convert insights to template-based Markdown
+- Save date-based files to Obsidian vault path
 
-## M5: 마무리 및 개선
+## M5: Polish & Extensions
 
-- 에러 처리 강화 (anyhow 또는 thiserror 도입)
-- 설정 파일(config) 지원
-- 복수 에이전트(Codex 등) 로그 지원 확장
-- ~~민감 정보 마스킹~~ (v0.5.0 완료 — `redactor` 모듈, 8개 내장 패턴, config 토글)
-- ~~`rwd summary` 개발 진척사항 요약~~ (v0.8.0 완료 — 캐싱, Markdown 요약, 클립보드 복사)
-- ~~`rwd slack` 슬랙 공유 메시지 생성~~ (v0.9.0 완료 — 비개발자용 슬랙 메시지 변환, 캐시 최신 여부 안내)
-- **학습 포인트**: 크레이트 설계, 에러 타입 추상화, 설정 관리 패턴, 정규식(regex), LazyLock, 프롬프트 설계
+- ~~Sensitive data masking~~ (v0.5.0 — `redactor` module, 8 built-in patterns, config toggle)
+- ~~`rwd summary` progress summaries~~ (v0.8.0 — caching, Markdown summary, clipboard copy)
+- ~~`rwd slack` share message~~ (v0.9.0 — non-developer friendly Slack message, cache freshness notice)
+- i18n English-first conversion (v0.10.0 — externalized prompts, `--lang` flag, EN/KO support)

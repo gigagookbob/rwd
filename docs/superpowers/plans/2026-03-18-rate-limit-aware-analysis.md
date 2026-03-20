@@ -1,4 +1,4 @@
-# Rate Limit 인식 분석 엔진 Implementation Plan
+# Rate Limit Aware Analysis Engine Implementation Plan
 
 > **For agentic workers:** REQUIRED: Use superpowers:subagent-driven-development (if subagents available) or superpowers:executing-plans to implement this plan. Steps use checkbox (`- [ ]`) syntax for tracking.
 
@@ -63,8 +63,8 @@ Expected: FAIL — module not found
 ```rust
 // src/analyzer/planner.rs
 
-/// API rate limit 정보.
-/// probe 호출의 응답 헤더에서 추출하거나, 실패 시 default_generous()를 사용한다.
+/// API rate limit information.
+/// Extracted from probe call response headers, or default_generous() on failure.
 #[derive(Debug, Clone)]
 pub struct RateLimits {
     pub input_tokens_per_minute: u64,
@@ -73,9 +73,9 @@ pub struct RateLimits {
 }
 
 impl RateLimits {
-    /// probe 실패 시 사용하는 관대한 기본값.
-    /// 대부분의 사용자가 single_shot으로 진행하게 되며,
-    /// 실제 제한에 걸리면 런타임 안전망이 처리한다.
+    /// Generous defaults used when probe fails.
+    /// Most users will proceed with single_shot,
+    /// and the runtime safety net handles actual limits.
     pub fn default_generous() -> Self {
         Self {
             input_tokens_per_minute: 1_000_000,
@@ -113,7 +113,7 @@ git commit -m "feat: RateLimits type + default_generous (rate-limit-aware #36)"
 - [ ] **Step 1: Add remaining types to planner.rs**
 
 ```rust
-/// 세션별 토큰 추정 결과.
+/// Per-session token estimation result.
 #[derive(Debug, Clone)]
 pub struct SessionEstimate {
     pub session_id: String,
@@ -121,16 +121,16 @@ pub struct SessionEstimate {
     pub entry_count: usize,
 }
 
-/// 개별 실행 스텝의 전략.
+/// Strategy for an individual execution step.
 #[derive(Debug, Clone, PartialEq)]
 pub enum StepStrategy {
-    /// ITPM 이내 — 그대로 전송
+    /// Within ITPM — send as-is
     Direct,
-    /// ITPM 초과 — 청크 분할 후 요약
+    /// Exceeds ITPM — chunk split then summarize
     Summarize { chunks: usize },
 }
 
-/// 실행 계획의 개별 스텝.
+/// An individual step in the execution plan.
 #[derive(Debug, Clone)]
 pub struct ExecutionStep {
     pub session_id: String,
@@ -138,8 +138,8 @@ pub struct ExecutionStep {
     pub estimated_tokens: u64,
 }
 
-/// 전체 실행 계획.
-/// is_single_shot이면 기존처럼 한 번에 전송 (높은 tier에서 오버헤드 없음).
+/// The overall execution plan.
+/// When is_single_shot is true, send everything at once as before (no overhead for high-tier users).
 #[derive(Debug, Clone)]
 pub struct ExecutionPlan {
     pub rate_limits: RateLimits,
@@ -149,7 +149,7 @@ pub struct ExecutionPlan {
 }
 ```
 
-- [ ] **Step 2: Build 확인**
+- [ ] **Step 2: Verify build**
 
 Run: `cargo build`
 Expected: PASS
@@ -170,34 +170,34 @@ git commit -m "feat: ExecutionPlan types — StepStrategy, ExecutionStep, Execut
 
 - [ ] **Step 1: Write failing tests for token estimation**
 
-`prompt.rs` 하단 tests 모듈에 추가:
+Add to the tests module at the bottom of `prompt.rs`:
 
 ```rust
 #[test]
-fn test_estimate_tokens_한국어() {
-    // "안녕하세요" = 5글자, ÷ 2 = 2 (반올림하지 않으므로 정수 나눗셈)
-    assert_eq!(super::estimate_tokens("안녕하세요"), 2);
+fn test_estimate_tokens_korean() {
+    // 5 characters, / 2 = 2 (integer division, no rounding)
+    assert_eq!(super::estimate_tokens("hello"), 2);
 }
 
 #[test]
-fn test_estimate_tokens_영어() {
-    // "hello world" = 11글자, ÷ 2 = 5
+fn test_estimate_tokens_english() {
+    // "hello world" = 11 characters, / 2 = 5
     assert_eq!(super::estimate_tokens("hello world"), 5);
 }
 
 #[test]
-fn test_estimate_tokens_빈문자열() {
+fn test_estimate_tokens_empty_string() {
     assert_eq!(super::estimate_tokens(""), 0);
 }
 
 #[test]
-fn test_estimate_sessions_세션별_추정() {
+fn test_estimate_sessions_per_session_estimation() {
     let entries = vec![
         serde_json::from_str::<LogEntry>(
-            r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"안녕하세요 반갑습니다"}}"#,
+            r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"hello nice to meet you"}}"#,
         ).unwrap(),
         serde_json::from_str::<LogEntry>(
-            r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"두번째 세션입니다"}}"#,
+            r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","message":{"role":"user","content":"this is the second session"}}"#,
         ).unwrap(),
     ];
     let estimates = estimate_sessions(&entries);
@@ -216,25 +216,25 @@ Expected: FAIL — function not found
 
 - [ ] **Step 3: Implement estimate_tokens and estimate_sessions**
 
-`prompt.rs` 상단에 import 추가:
+Add import at the top of `prompt.rs`:
 ```rust
 use super::planner::SessionEstimate;
 ```
 
-함수 추가:
+Add functions:
 ```rust
-/// 시스템 프롬프트의 추정 토큰 수 (SYSTEM_PROMPT 문자열 기준 사전 계산).
-/// provider::SYSTEM_PROMPT의 글자 수 ÷ 2.
+/// Estimated token count for the system prompt (pre-calculated from SYSTEM_PROMPT character count).
+/// provider::SYSTEM_PROMPT character count / 2.
 pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 800;
 
-/// 텍스트의 토큰 수를 간이 추정한다.
-/// 한국어는 음절당 ~1토큰이므로, 글자 수 ÷ 2는 보수적 추정이다.
+/// Rough token estimation for text.
+/// Korean syllables are ~1 token each, so character count / 2 is a conservative estimate.
 pub fn estimate_tokens(text: &str) -> u64 {
     (text.chars().count() as u64) / 2
 }
 
-/// 세션별 토큰 추정 결과를 반환한다.
-/// extract_session_ids로 세션 목록을 구한 뒤, 세션별 엔트리의 텍스트 크기를 추정한다.
+/// Returns per-session token estimates.
+/// Gets session list via extract_session_ids, then estimates text size for each session's entries.
 pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
     let session_ids = extract_session_ids(entries);
     let mut estimates = Vec::new();
@@ -254,8 +254,8 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
             })
             .collect();
 
-        // build_prompt과 동일한 형식으로 텍스트 크기를 추정한다.
-        // 실제 build_prompt을 호출하지 않고, 엔트리의 원시 텍스트 길이를 합산한다.
+        // Estimate text size in the same format as build_prompt.
+        // Instead of calling build_prompt, sum the raw text lengths of entries.
         let mut total_chars: u64 = 0;
         let entry_count = session_entries.len();
 
@@ -383,8 +383,8 @@ fn test_build_plan_default_generous_is_single_shot() {
 
 #[test]
 fn test_build_plan_reserves_summary_budget() {
-    // ITPM이 35,000이고 세션 합계가 31,000이면,
-    // analyze_summary 여유분(5,000) 고려 시 single_shot 불가.
+    // ITPM is 35,000 and session total is 31,000.
+    // With analyze_summary headroom (5,000), single_shot is not possible.
     let limits = RateLimits {
         input_tokens_per_minute: 35_000,
         output_tokens_per_minute: 8_000,
@@ -394,13 +394,13 @@ fn test_build_plan_reserves_summary_budget() {
         SessionEstimate { session_id: "s1".into(), estimated_tokens: 31_000, entry_count: 15 },
     ];
     let plan = build_execution_plan(&limits, &estimates);
-    // 31,000 + 5,000(예약) = 36,000 > 35,000 → single_shot 아님
+    // 31,000 + 5,000 (reserved) = 36,000 > 35,000 → not single_shot
     assert!(!plan.is_single_shot);
 }
 
 #[test]
 fn test_build_plan_exact_boundary_is_single_shot() {
-    // total + budget == ITPM 정확히 일치 시 single_shot (<=)
+    // When total + budget == ITPM exactly → single_shot (<=)
     let limits = RateLimits {
         input_tokens_per_minute: 35_000,
         output_tokens_per_minute: 8_000,
@@ -423,15 +423,15 @@ Expected: FAIL — function not found
 - [ ] **Step 3: Implement build_execution_plan**
 
 ```rust
-/// analyze_summary() 호출을 위해 예약하는 토큰 여유분.
+/// Token headroom reserved for the analyze_summary() call.
 const SUMMARY_BUDGET_TOKENS: u64 = 5_000;
 
-/// rate limit과 세션별 추정치를 기반으로 실행 계획을 수립한다.
+/// Builds an execution plan based on rate limits and per-session estimates.
 ///
-/// 전략 분기:
-/// - 전체 합계 + 여유분 ≤ ITPM → single_shot (한 번에 전송)
-/// - 개별 세션 ≤ ITPM → Direct (세션별 순차)
-/// - 개별 세션 > ITPM → Summarize (청크 분할 후 요약)
+/// Strategy branching:
+/// - Total sum + headroom <= ITPM → single_shot (send all at once)
+/// - Individual session <= ITPM → Direct (sequential per-session)
+/// - Individual session > ITPM → Summarize (chunk split then summarize)
 pub fn build_execution_plan(
     limits: &RateLimits,
     estimates: &[SessionEstimate],
@@ -439,7 +439,7 @@ pub fn build_execution_plan(
     let itpm = limits.input_tokens_per_minute;
     let total: u64 = estimates.iter().map(|e| e.estimated_tokens).sum();
 
-    // 전체가 ITPM 안에 들어가면 single_shot
+    // If everything fits within ITPM → single_shot
     if total + SUMMARY_BUDGET_TOKENS <= itpm {
         return ExecutionPlan {
             rate_limits: limits.clone(),
@@ -449,14 +449,14 @@ pub fn build_execution_plan(
         };
     }
 
-    // 세션별로 전략 결정
+    // Determine strategy per session
     let steps: Vec<ExecutionStep> = estimates
         .iter()
         .map(|est| {
             let strategy = if est.estimated_tokens <= itpm {
                 StepStrategy::Direct
             } else {
-                // ITPM 기준으로 필요한 청크 수 계산 (올림)
+                // Calculate required chunk count based on ITPM (ceiling)
                 let chunks = ((est.estimated_tokens as f64) / (itpm as f64)).ceil() as usize;
                 StepStrategy::Summarize { chunks: chunks.max(2) }
             };
@@ -491,7 +491,7 @@ Expected: no warnings
 
 ```bash
 git add src/analyzer/planner.rs
-git commit -m "feat: build_execution_plan — single_shot/direct/summarize 전략 분기"
+git commit -m "feat: build_execution_plan — single_shot/direct/summarize strategy branching"
 ```
 
 ---
@@ -505,13 +505,13 @@ git commit -m "feat: build_execution_plan — single_shot/direct/summarize 전�
 
 - [ ] **Step 1: Implement probe_anthropic_rate_limits**
 
-Anthropic probe는 실제 API 호출이 필요하므로 단위 테스트 대신 헤더 파싱 로직만 별도 테스트한다.
+Since Anthropic probe requires an actual API call, test only the header parsing logic via unit tests.
 
 ```rust
 use super::planner::RateLimits;
 
-/// Anthropic API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
-/// 실패 시 None을 반환하며, 호출자가 default_generous로 대체한다.
+/// Sends a minimal request to the Anthropic API and reads rate limits from response headers.
+/// Returns None on failure; caller falls back to default_generous.
 pub async fn probe_anthropic_rate_limits(
     api_key: &str,
 ) -> Option<RateLimits> {
@@ -540,7 +540,7 @@ pub async fn probe_anthropic_rate_limits(
     parse_anthropic_rate_headers(&response)
 }
 
-/// Anthropic 응답 헤더에서 rate limit 값을 추출한다.
+/// Extracts rate limit values from Anthropic response headers.
 fn parse_anthropic_rate_headers(response: &reqwest::Response) -> Option<RateLimits> {
     let headers = response.headers();
 
@@ -569,20 +569,20 @@ fn parse_anthropic_rate_headers(response: &reqwest::Response) -> Option<RateLimi
 }
 ```
 
-- [ ] **Step 2: Write test for header parsing**
+- [ ] **Step 2: Write reference test for header parsing**
 
 ```rust
 #[test]
-fn test_parse_anthropic_rate_headers_참고용() {
-    // parse_anthropic_rate_headers는 reqwest::Response를 받으므로
-    // 직접 단위 테스트가 어렵다. 대신 헤더 파싱 로직의 정확성은
-    // 통합 테스트(실제 API 호출)에서 검증한다.
-    // 여기서는 컴파일 확인만 한다.
+fn test_parse_anthropic_rate_headers_reference() {
+    // parse_anthropic_rate_headers takes a reqwest::Response so
+    // direct unit testing is difficult. Header parsing accuracy is
+    // verified through integration tests (actual API calls).
+    // This test only confirms compilation.
     assert!(true);
 }
 ```
 
-- [ ] **Step 3: Build 확인**
+- [ ] **Step 3: Verify build**
 
 Run: `cargo build`
 Expected: PASS
@@ -591,7 +591,7 @@ Expected: PASS
 
 ```bash
 git add src/analyzer/anthropic.rs
-git commit -m "feat: probe_anthropic_rate_limits — 응답 헤더에서 ITPM/OTPM/RPM 추출"
+git commit -m "feat: probe_anthropic_rate_limits — extract ITPM/OTPM/RPM from response headers"
 ```
 
 ---
@@ -606,7 +606,7 @@ git commit -m "feat: probe_anthropic_rate_limits — 응답 헤더에서 ITPM/OT
 ```rust
 use super::planner::RateLimits;
 
-/// OpenAI API에 최소 요청을 보내 응답 헤더에서 rate limit을 읽는다.
+/// Sends a minimal request to the OpenAI API and reads rate limits from response headers.
 pub async fn probe_openai_rate_limits(
     api_key: &str,
 ) -> Option<RateLimits> {
@@ -633,12 +633,12 @@ pub async fn probe_openai_rate_limits(
     parse_openai_rate_headers(&response)
 }
 
-/// OpenAI 응답 헤더에서 rate limit 값을 추출한다.
+/// Extracts rate limit values from OpenAI response headers.
 fn parse_openai_rate_headers(response: &reqwest::Response) -> Option<RateLimits> {
     let headers = response.headers();
 
-    // OpenAI는 x-ratelimit-limit-tokens (TPM 합산) 헤더를 사용한다.
-    // ITPM/OTPM 분리가 없으므로 tokens를 ITPM으로 사용하고 OTPM은 1/4로 추정.
+    // OpenAI uses x-ratelimit-limit-tokens (combined TPM) header.
+    // No ITPM/OTPM separation, so use tokens as ITPM and estimate OTPM as 1/4.
     let tpm = headers
         .get("x-ratelimit-limit-tokens")
         .and_then(|v| v.to_str().ok())
@@ -658,7 +658,7 @@ fn parse_openai_rate_headers(response: &reqwest::Response) -> Option<RateLimits>
 }
 ```
 
-- [ ] **Step 2: Build 확인**
+- [ ] **Step 2: Verify build**
 
 Run: `cargo build`
 Expected: PASS
@@ -667,7 +667,7 @@ Expected: PASS
 
 ```bash
 git add src/analyzer/openai.rs
-git commit -m "feat: probe_openai_rate_limits — x-ratelimit-limit-tokens 헤더 파싱"
+git commit -m "feat: probe_openai_rate_limits — x-ratelimit-limit-tokens header parsing"
 ```
 
 ---
@@ -679,11 +679,11 @@ git commit -m "feat: probe_openai_rate_limits — x-ratelimit-limit-tokens 헤�
 
 - [ ] **Step 1: Add probe_rate_limits to LlmProvider**
 
-`impl LlmProvider` 블록에 추가:
+Add to `impl LlmProvider` block:
 
 ```rust
-    /// API probe 호출로 사용자의 실제 rate limit을 확인한다.
-    /// 실패 시 default_generous()를 반환하여 single_shot으로 진행한다.
+    /// Checks the user's actual rate limits via an API probe call.
+    /// Returns default_generous() on failure to proceed with single_shot.
     pub async fn probe_rate_limits(
         &self,
         api_key: &str,
@@ -697,13 +697,13 @@ git commit -m "feat: probe_openai_rate_limits — x-ratelimit-limit-tokens 헤�
             }
         };
         result.unwrap_or_else(|| {
-            eprintln!("⚠ rate limit 확인 실패, 기본값으로 진행합니다.");
+            eprintln!("Warning: rate limit check failed, proceeding with defaults.");
             super::planner::RateLimits::default_generous()
         })
     }
 ```
 
-- [ ] **Step 2: Build 확인**
+- [ ] **Step 2: Verify build**
 
 Run: `cargo build`
 Expected: PASS
@@ -712,7 +712,7 @@ Expected: PASS
 
 ```bash
 git add src/analyzer/provider.rs
-git commit -m "feat: LlmProvider::probe_rate_limits — 프로바이더별 probe dispatch"
+git commit -m "feat: LlmProvider::probe_rate_limits — per-provider probe dispatch"
 ```
 
 ---
@@ -736,8 +736,8 @@ mod tests {
 
     #[test]
     fn test_split_into_chunks_respects_token_limit() {
-        // 각 메시지가 약 10토큰(20글자)이고 ITPM이 25토큰이면
-        // 한 청크에 2개씩 들어가야 한다.
+        // Each message is ~10 tokens (20 chars), ITPM is 25 tokens,
+        // so each chunk should hold 2 messages.
         let messages = vec![
             ("USER".to_string(), "a".repeat(20)),   // ~10 tokens
             ("USER".to_string(), "b".repeat(20)),   // ~10 tokens
@@ -751,7 +751,7 @@ mod tests {
 
     #[test]
     fn test_split_into_chunks_single_message_exceeds_limit() {
-        // 단일 메시지가 제한을 초과해도 스킵하지 않고 단독 청크로 넣는다.
+        // A single message exceeding the limit still gets its own chunk (not skipped).
         let messages = vec![
             ("USER".to_string(), "a".repeat(100)),  // ~50 tokens
         ];
@@ -761,7 +761,7 @@ mod tests {
     }
 
     #[test]
-    fn test_split_into_chunks_빈_메시지() {
+    fn test_split_into_chunks_empty_messages() {
         let messages: Vec<(String, String)> = vec![];
         let chunks = split_into_chunks(&messages, 30_000);
         assert!(chunks.is_empty());
@@ -781,18 +781,18 @@ Expected: FAIL — module not found
 
 use super::prompt::estimate_tokens;
 
-/// 세션 요약에 사용하는 프롬프트.
-/// rwd의 인사이트 카테고리에 맞춰 핵심 내용을 보존하도록 지시한다.
-pub const CHUNK_SUMMARIZE_PROMPT: &str = r#"다음 개발 세션 대화에서 아래 항목을 중심으로 요약하라:
-- 내린 기술적 결정과 그 이유
-- 실수나 수정 사항
-- 새로 배운 점 (TIL)
-- 흥미로운 발견이나 의문점
-원문의 구체적 기술 용어와 맥락을 보존하라."#;
+/// Prompt used for session summarization.
+/// Instructs preservation of key content aligned with rwd's insight categories.
+pub const CHUNK_SUMMARIZE_PROMPT: &str = r#"Summarize the following development session conversation, focusing on:
+- Technical decisions made and their rationale
+- Mistakes or corrections
+- Newly learned concepts (TIL)
+- Interesting discoveries or questions
+Preserve specific technical terms and context from the original."#;
 
-/// 메시지 목록을 ITPM 제한 내의 청크들로 분할한다.
-/// 메시지 경계에서만 자른다 (메시지 중간에서 자르지 않음).
-/// 단일 메시지가 제한을 초과하면 단독 청크로 넣는다.
+/// Splits a message list into chunks that fit within the ITPM limit.
+/// Only splits at message boundaries (never in the middle of a message).
+/// A single message exceeding the limit gets its own chunk.
 pub fn split_into_chunks(
     messages: &[(String, String)],
     itpm: u64,
@@ -808,7 +808,7 @@ pub fn split_into_chunks(
     for (role, text) in messages {
         let msg_tokens = estimate_tokens(text);
 
-        // 현재 청크에 추가하면 초과하는 경우
+        // Adding to current chunk would exceed limit
         if !current_chunk.is_empty() && current_tokens + msg_tokens > itpm {
             chunks.push(current_chunk);
             current_chunk = Vec::new();
@@ -857,8 +857,8 @@ git commit -m "feat: summarizer — split_into_chunks + CHUNK_SUMMARIZE_PROMPT"
 use super::planner::RateLimits;
 use super::provider::LlmProvider;
 
-/// 대형 세션의 메시지를 청크별로 요약하고, 합친 요약 텍스트를 반환한다.
-/// 각 청크 사이에 rate pacing을 적용한다.
+/// Summarizes a large session's messages chunk-by-chunk and returns the combined summary text.
+/// Applies rate pacing between chunks.
 pub async fn summarize_chunks(
     chunks: &[Vec<(String, String)>],
     provider: &LlmProvider,
@@ -869,16 +869,16 @@ pub async fn summarize_chunks(
     let total = chunks.len();
 
     for (i, chunk) in chunks.iter().enumerate() {
-        // 청크를 텍스트로 변환
+        // Convert chunk to text
         let chunk_text: String = chunk
             .iter()
             .map(|(role, text)| format!("[{role}] {text}"))
             .collect::<Vec<_>>()
             .join("\n");
 
-        eprintln!("    청크 {}/{total} 요약 중...", i + 1);
+        eprintln!("    Summarizing chunk {}/{}...", i + 1, total);
 
-        // 요약 API 호출 (max_tokens: 2000은 provider 수준에서 설정)
+        // Summary API call (max_tokens: 2000 set at provider level)
         let summary = provider
             .call_api_with_max_tokens(
                 api_key,
@@ -889,12 +889,12 @@ pub async fn summarize_chunks(
             .await?;
         summaries.push(summary);
 
-        // rate pacing: 마지막 청크가 아니면 대기
+        // Rate pacing: wait unless this is the last chunk
         if i + 1 < total {
             let chunk_tokens = estimate_tokens(&chunk_text);
             let wait = calculate_wait(chunk_tokens, limits);
             if wait > 0.0 {
-                eprintln!("    다음 요청까지 대기 중... ({:.0}초)", wait);
+                eprintln!("    Waiting for next request... ({:.0}s)", wait);
                 tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
             }
         }
@@ -903,8 +903,8 @@ pub async fn summarize_chunks(
     Ok(summaries.join("\n\n"))
 }
 
-/// ITPM/RPM 기반 대기 시간을 계산한다.
-/// max(itpm_wait, rpm_wait)를 반환한다.
+/// Calculates wait time based on ITPM/RPM.
+/// Returns max(itpm_wait, rpm_wait).
 pub fn calculate_wait(used_tokens: u64, limits: &RateLimits) -> f64 {
     let itpm_wait = (used_tokens as f64 / limits.input_tokens_per_minute as f64) * 60.0;
     let rpm_wait = 60.0 / limits.requests_per_minute as f64;
@@ -914,62 +914,31 @@ pub fn calculate_wait(used_tokens: u64, limits: &RateLimits) -> f64 {
 
 - [ ] **Step 2: Add `_with_max_tokens` variants to anthropic.rs and openai.rs**
 
-기존 `call_anthropic_api`/`call_openai_api`는 그대로 유지 (하위 호환).
-새 함수를 추가하여 `max_tokens` 파라미터를 받는다:
+Keep existing `call_anthropic_api`/`call_openai_api` as-is (backward compatible).
+Add new functions that accept a `max_tokens` parameter:
 
 `anthropic.rs`:
 ```rust
-/// max_tokens를 지정할 수 있는 API 호출 변형.
+/// API call variant with configurable max_tokens.
 pub async fn call_anthropic_api_with_max_tokens(
     api_key: &str,
     system_prompt: &str,
     conversation_text: &str,
     max_tokens: u32,
 ) -> Result<String, super::AnalyzerError> {
-    let client = reqwest::Client::new();
-    let request_body = ApiRequest {
-        model: MODEL.to_string(),
-        max_tokens,
-        system: system_prompt.to_string(),
-        messages: vec![ApiMessage {
-            role: "user".to_string(),
-            content: conversation_text.to_string(),
-        }],
-    };
-    let response = client
-        .post(API_URL)
-        .header("x-api-key", api_key)
-        .header("anthropic-version", API_VERSION)
-        .header("content-type", "application/json")
-        .json(&request_body)
-        .send()
-        .await?;
-
-    let status = response.status();
-    if !status.is_success() {
-        let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("API 요청 실패 ({status}): {error_body}").into());
-    }
-    let api_response: ApiResponse = response.json().await?;
-    let text = api_response
-        .content
-        .iter()
-        .find(|block| block.block_type == "text")
-        .and_then(|block| block.text.as_deref())
-        .ok_or("API 응답에 텍스트 블록이 없습니다")?;
-    Ok(text.to_string())
+    // ... same as call_anthropic_api but with configurable max_tokens ...
 }
 ```
 
-`openai.rs`에도 동일 패턴으로 `call_openai_api_with_max_tokens` 추가.
+Add `call_openai_api_with_max_tokens` to `openai.rs` with the same pattern.
 
 - [ ] **Step 3: Add call_api_with_max_tokens to provider.rs**
 
-`impl LlmProvider` 블록에 추가:
+Add to `impl LlmProvider` block:
 
 ```rust
-    /// API 호출 (max_tokens 지정 가능).
-    /// 요약 호출 시 max_tokens를 2000으로 제한하고, 분석 호출은 기존 16384를 유지.
+    /// API call with configurable max_tokens.
+    /// Used for summary calls with max_tokens=2000, while analysis calls keep the existing 16384.
     pub async fn call_api_with_max_tokens(
         &self,
         api_key: &str,
@@ -996,30 +965,30 @@ pub async fn call_anthropic_api_with_max_tokens(
 
 - [ ] **Step 3: Write test for calculate_wait**
 
-`summarizer.rs` tests에 추가:
+Add to `summarizer.rs` tests:
 
 ```rust
 #[test]
-fn test_calculate_wait_itpm_기반() {
+fn test_calculate_wait_itpm_based() {
     let limits = RateLimits {
         input_tokens_per_minute: 30_000,
         output_tokens_per_minute: 8_000,
-        requests_per_minute: 1_000, // RPM이 높으므로 ITPM이 병목
+        requests_per_minute: 1_000, // RPM is high, so ITPM is the bottleneck
     };
     let wait = calculate_wait(15_000, &limits);
-    // 15000/30000 * 60 = 30초
+    // 15000/30000 * 60 = 30 seconds
     assert!((wait - 30.0).abs() < 0.1);
 }
 
 #[test]
-fn test_calculate_wait_rpm_기반() {
+fn test_calculate_wait_rpm_based() {
     let limits = RateLimits {
-        input_tokens_per_minute: 1_000_000, // ITPM이 높으므로 RPM이 병목
+        input_tokens_per_minute: 1_000_000, // ITPM is high, so RPM is the bottleneck
         output_tokens_per_minute: 200_000,
         requests_per_minute: 50,
     };
     let wait = calculate_wait(100, &limits);
-    // 60/50 = 1.2초
+    // 60/50 = 1.2 seconds
     assert!((wait - 1.2).abs() < 0.1);
 }
 ```
@@ -1045,17 +1014,17 @@ git commit -m "feat: summarize_chunks + calculate_wait + call_summarize_api"
 
 - [ ] **Step 1: Add execute_plan function**
 
-기존 `analyze_entries_by_session`, `is_context_limit_error`, `is_rate_limit_error` 함수와 해당 테스트를 제거하고, 새 함수를 추가한다.
+Remove existing `analyze_entries_by_session`, `is_context_limit_error`, `is_rate_limit_error` functions and their tests, then add the new function.
 
-`mod.rs` 상단에 import 추가:
+Add import at the top of `mod.rs`:
 ```rust
 use planner::{ExecutionPlan, StepStrategy};
 ```
 
-새 함수 추가:
+Add new function:
 
 ```rust
-/// 실행 계획을 받아 순차 실행하고 결과를 병합한다.
+/// Receives an execution plan, executes steps sequentially, and merges results.
 async fn execute_plan(
     plan: &ExecutionPlan,
     entries: &[LogEntry],
@@ -1068,7 +1037,7 @@ async fn execute_plan(
     let total_steps = plan.steps.len();
 
     for (i, step) in plan.steps.iter().enumerate() {
-        eprintln!("⠋ [{}/{}] {} 분석 중...", i + 1, total_steps, step.session_id);
+        eprintln!("⠋ [{}/{}] Analyzing {}...", i + 1, total_steps, step.session_id);
 
         let session_entries: Vec<LogEntry> = entries
             .iter()
@@ -1092,36 +1061,36 @@ async fn execute_plan(
 
         match result {
             Ok((analysis, redact)) => {
-                eprintln!("✓ [{}/{}] 완료", i + 1, total_steps);
+                eprintln!("✓ [{}/{}] Complete", i + 1, total_steps);
                 results.push(analysis);
                 total_redact.merge(redact);
             }
             Err(e) => {
-                eprintln!("⚠ [{}/{}] {} 스킵: {}", i + 1, total_steps, step.session_id, e);
+                eprintln!("⚠ [{}/{}] {} skipped: {}", i + 1, total_steps, step.session_id, e);
             }
         }
 
-        // rate pacing: 마지막 스텝이 아니면 대기
+        // Rate pacing: wait unless this is the last step
         if i + 1 < total_steps {
             let wait = summarizer::calculate_wait(
                 step.estimated_tokens,
                 &plan.rate_limits,
             );
             if wait > 0.0 {
-                eprintln!("⠋ 다음 요청까지 대기 중... ({:.0}초)", wait);
+                eprintln!("⠋ Waiting for next request... ({:.0}s)", wait);
                 tokio::time::sleep(std::time::Duration::from_secs_f64(wait)).await;
             }
         }
     }
 
     if results.is_empty() {
-        return Err("모든 세션의 분석에 실패했습니다.".into());
+        return Err("All session analyses failed.".into());
     }
 
     Ok((insight::merge_results(results), total_redact))
 }
 
-/// Direct 스텝: 세션 프롬프트를 그대로 전송.
+/// Direct step: send session prompt as-is.
 async fn execute_direct_step(
     entries: &[LogEntry],
     provider: &provider::LlmProvider,
@@ -1139,7 +1108,7 @@ async fn execute_direct_step(
     Ok((result, redact_result))
 }
 
-/// Summarize 스텝: 대형 세션을 청크별 요약 후 분석.
+/// Summarize step: summarize a large session chunk-by-chunk, then analyze.
 async fn execute_summarize_step(
     entries: &[LogEntry],
     session_id: &str,
@@ -1148,13 +1117,13 @@ async fn execute_summarize_step(
     limits: &planner::RateLimits,
     redactor_enabled: bool,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
-    // 세션의 메시지를 (role, text) 튜플로 추출
+    // Extract (role, text) tuples from session messages
     let messages = prompt::extract_messages(entries);
 
     let chunks = summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
     let summary_text = summarizer::summarize_chunks(&chunks, provider, api_key, limits).await?;
 
-    // 요약본으로 최종 분석
+    // Final analysis on summarized text
     let prompt_with_session = format!("[Session: {session_id}]\n{summary_text}");
     let (final_prompt, redact_result) = if redactor_enabled {
         crate::redactor::redact_text(&prompt_with_session)
@@ -1170,8 +1139,8 @@ async fn execute_summarize_step(
 - [ ] **Step 2: Add extract_messages helper to prompt.rs**
 
 ```rust
-/// LogEntry에서 (role, text) 튜플 목록을 추출한다.
-/// summarizer의 split_into_chunks에서 사용한다.
+/// Extracts (role, text) tuples from LogEntries.
+/// Used by summarizer's split_into_chunks.
 pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for entry in entries {
@@ -1198,7 +1167,7 @@ pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
 
 - [ ] **Step 3: Refactor analyze_entries to use probe → plan → execute**
 
-기존 `analyze_entries` 본문을 교체:
+Replace existing `analyze_entries` body:
 
 ```rust
 pub async fn analyze_entries(
@@ -1207,8 +1176,8 @@ pub async fn analyze_entries(
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
 
-    // 1. Probe: 사용자의 실제 rate limit 확인
-    eprintln!("⠋ API 한도 확인 중...");
+    // 1. Probe: check user's actual rate limits
+    eprintln!("⠋ Checking API limits...");
     let limits = provider.probe_rate_limits(&api_key).await;
     eprintln!(
         "✓ ITPM: {} | OTPM: {} | RPM: {}",
@@ -1217,29 +1186,29 @@ pub async fn analyze_entries(
         limits.requests_per_minute,
     );
 
-    // 2. Estimate: 세션별 토큰 추정
+    // 2. Estimate: per-session token estimation
     let estimates = prompt::estimate_sessions(entries);
 
-    // 3. Plan: 실행 계획 수립
+    // 3. Plan: build execution plan
     let plan = planner::build_execution_plan(&limits, &estimates);
 
-    // 4. Display: 계획 출력
+    // 4. Display: show the plan
     if plan.is_single_shot {
-        eprintln!("✓ 전체 로그를 한 번에 분석합니다 (추정 {}토큰)", plan.total_estimated_tokens);
+        eprintln!("✓ Analyzing all logs in a single shot (estimated {} tokens)", plan.total_estimated_tokens);
     } else {
-        eprintln!("✓ 세션 {}개 분석 예정 (총 {} 토큰 추정)", plan.steps.len(), plan.total_estimated_tokens);
+        eprintln!("✓ {} sessions to analyze (estimated {} total tokens)", plan.steps.len(), plan.total_estimated_tokens);
         for step in &plan.steps {
             let strategy_desc = match &step.strategy {
-                StepStrategy::Direct => "직접 분석".to_string(),
-                StepStrategy::Summarize { chunks } => format!("요약 후 분석 ({chunks} 청크)"),
+                StepStrategy::Direct => "direct analysis".to_string(),
+                StepStrategy::Summarize { chunks } => format!("summarize then analyze ({chunks} chunks)"),
             };
-            eprintln!("  • {}: {} 토큰 → {}", step.session_id, step.estimated_tokens, strategy_desc);
+            eprintln!("  • {}: {} tokens → {}", step.session_id, step.estimated_tokens, strategy_desc);
         }
     }
 
     // 5. Execute
     if plan.is_single_shot {
-        // 기존과 동일: 한 번에 전송
+        // Same as before: send all at once
         let prompt_text = prompt::build_prompt(entries)?;
         let (final_prompt, redact_result) = if redactor_enabled {
             crate::redactor::redact_text(&prompt_text)
@@ -1257,18 +1226,18 @@ pub async fn analyze_entries(
 
 - [ ] **Step 4: Remove old fallback code**
 
-`mod.rs`에서 다음을 제거:
-- `analyze_entries_by_session()` 함수 (라인 83-147)
-- `is_context_limit_error()` 함수 (라인 193-196)
-- `is_rate_limit_error()` 함수 (라인 199-201)
-- `#[cfg(test)] mod tests` 블록 전체 (라인 203-242) — 제거된 함수의 테스트들
+Remove the following from `mod.rs`:
+- `analyze_entries_by_session()` function (lines 83-147)
+- `is_context_limit_error()` function (lines 193-196)
+- `is_rate_limit_error()` function (lines 199-201)
+- `#[cfg(test)] mod tests` block (lines 203-242) — tests for the removed functions
 
-`entry_session_id()` 함수는 유지한다 (execute_plan에서 사용).
+Keep `entry_session_id()` (used by execute_plan).
 
 - [ ] **Step 5: Build + test**
 
 Run: `cargo build && cargo test`
-Expected: PASS (기존 fallback 테스트가 제거되었으므로 남은 테스트만 통과)
+Expected: PASS (old fallback tests removed, remaining tests pass)
 
 - [ ] **Step 6: Run clippy**
 
@@ -1279,34 +1248,35 @@ Expected: no warnings
 
 ```bash
 git add src/analyzer/mod.rs src/analyzer/prompt.rs
-git commit -m "feat: analyze_entries를 probe → plan → execute 흐름으로 리팩터링
+git commit -m "feat: refactor analyze_entries to probe → plan → execute flow
 
-기존 try-fallback 방식을 제거하고, rate limit probe 기반
-사전 계획 방식으로 교체. 모든 tier에서 분석이 동작하도록 한다.
+Remove the old try-fallback approach and replace with
+rate limit probe-based proactive planning. Ensures
+analysis works for all tiers.
 
-관련: #36"
+Related: #36"
 ```
 
 ---
 
-### Task 11: 429 재시도 로직
+### Task 11: 429 retry logic
 
 **Files:**
 - Modify: `src/analyzer/mod.rs`
 
-- [ ] **Step 1: execute_plan의 에러 처리에 429 재시도 추가**
+- [ ] **Step 1: Add 429 retry to execute_plan error handling**
 
-`execute_plan`의 `Err(e)` 분기를 수정:
+Modify the `Err(e)` branch in `execute_plan`:
 
 ```rust
 Err(e) => {
     let err_msg = e.to_string();
-    // 429 rate limit → retry-after 대기 후 1회 재시도
+    // 429 rate limit → wait then retry once
     if err_msg.contains("429") {
-        eprintln!("⚠ [{}/{}] rate limit 초과, 60초 대기 후 재시도...", i + 1, total_steps);
+        eprintln!("⚠ [{}/{}] rate limit exceeded, waiting 60s then retrying...", i + 1, total_steps);
         tokio::time::sleep(std::time::Duration::from_secs(60)).await;
 
-        // 재시도
+        // Retry
         let retry_result = match &step.strategy {
             StepStrategy::Direct => {
                 execute_direct_step(
@@ -1323,16 +1293,16 @@ Err(e) => {
 
         match retry_result {
             Ok((analysis, redact)) => {
-                eprintln!("✓ [{}/{}] 재시도 성공", i + 1, total_steps);
+                eprintln!("✓ [{}/{}] Retry succeeded", i + 1, total_steps);
                 results.push(analysis);
                 total_redact.merge(redact);
             }
             Err(retry_err) => {
-                eprintln!("⚠ [{}/{}] {} 스킵 (재시도 실패): {}", i + 1, total_steps, step.session_id, retry_err);
+                eprintln!("⚠ [{}/{}] {} skipped (retry failed): {}", i + 1, total_steps, step.session_id, retry_err);
             }
         }
     } else {
-        eprintln!("⚠ [{}/{}] {} 스킵: {}", i + 1, total_steps, step.session_id, err_msg);
+        eprintln!("⚠ [{}/{}] {} skipped: {}", i + 1, total_steps, step.session_id, err_msg);
     }
 }
 ```
@@ -1346,21 +1316,21 @@ Expected: PASS
 
 ```bash
 git add src/analyzer/mod.rs
-git commit -m "feat: execute_plan 429 재시도 로직 — 1회 대기 후 retry, 실패 시 스킵"
+git commit -m "feat: execute_plan 429 retry logic — wait once then retry, skip on failure"
 ```
 
-**Note:** `execute_plan`, `execute_direct_step`, `execute_summarize_step`는 async + 외부 API 의존이므로 단위 테스트가 어렵다. probe 실패 시 default_generous 적용, 스텝 부분 실패 처리, 429 재시도 등은 실제 API 키를 사용하는 통합 테스트 또는 수동 검증으로 확인한다. 향후 mock provider 도입 시 자동화 가능.
+**Note:** `execute_plan`, `execute_direct_step`, and `execute_summarize_step` are async with external API dependencies, making unit testing difficult. Probe failure default_generous, partial step failure handling, and 429 retry are verified via integration tests with real API keys or manual testing. Can be automated in the future with a mock provider.
 
 ---
 
-### Task 12: ARCHITECTURE.md 업데이트 + 최종 검증
+### Task 12: ARCHITECTURE.md update + final verification
 
 **Files:**
 - Modify: `docs/ARCHITECTURE.md`
 
-- [ ] **Step 1: ARCHITECTURE.md에 새 모듈 추가**
+- [ ] **Step 1: Add new modules to ARCHITECTURE.md**
 
-`analyzer/` 섹션의 프로젝트 구조 트리에 `planner.rs`, `summarizer.rs` 추가.
+Add `planner.rs` and `summarizer.rs` to the `analyzer/` section in the project structure tree.
 
 - [ ] **Step 2: Full build + test + clippy**
 
@@ -1371,5 +1341,5 @@ Expected: ALL PASS
 
 ```bash
 git add docs/ARCHITECTURE.md
-git commit -m "docs: ARCHITECTURE.md에 planner, summarizer 모듈 추가"
+git commit -m "docs: add planner, summarizer modules to ARCHITECTURE.md"
 ```

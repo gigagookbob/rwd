@@ -1,88 +1,90 @@
 # rwd (rewind)
 
-AI Agent 세션 로그를 분석하여 일일 개발 인사이트를 추출하고, Obsidian vault에 Markdown으로 저장하는 CLI 도구.
+CLI tool that analyzes AI coding session logs, extracts daily development insights, and saves them as Markdown to your Obsidian vault.
 
 ## rwd vs Claude Code `/insights`
 
-Claude Code에는 `/insights` 명령어가 내장되어 있습니다. rwd는 이와 목적이 다릅니다.
+Claude Code has a built-in `/insights` command. rwd serves a different purpose.
 
-`/insights`는 **"나는 Claude를 효율적으로 쓰고 있나?"** 에 대한 답입니다 — 30일간의 도구 사용 패턴, 토큰 소비량, 마찰점을 분석하여 HTML 대시보드로 보여줍니다. 코딩 효율성 리포트입니다.
+`/insights` answers **"Am I using Claude efficiently?"** — it analyzes 30 days of tool usage patterns, token consumption, and friction points as an HTML dashboard. It's a coding efficiency report.
 
-rwd는 **"오늘 뭘 결정했고, 왜?"** 에 대한 답입니다 — 하루의 모든 세션에서 의사결정, 궁금했던 것, 모델이 틀렸던 것을 추출하여 Obsidian Daily Notes로 쌓아갑니다. 개발 일지입니다.
+rwd answers **"What did I decide today, and why?"** — it extracts decisions, curiosities, and model corrections from all sessions and accumulates them as Obsidian Daily Notes. It's a developer journal.
 
 | | `/insights` | `rwd` |
 |--|-------------|-------|
-| 관점 | 도구 사용 패턴, 효율성 | 의사결정, 학습, 모델 수정 |
-| 기간 | 30일 롤링 | 매일 |
-| 출력 | HTML 대시보드 (1회성) | Obsidian Daily Notes (누적) |
-| 분석 | 정량적 (토큰, 도구 횟수, 코드량) | 정성적 (왜 A를 선택했나, 뭐가 궁금했나) |
-| 환경 | Claude Code 세션 내에서만 | 독립 CLI, 어디서든 |
+| Focus | Tool usage patterns, efficiency | Decisions, learning, model corrections |
+| Period | 30-day rolling | Daily |
+| Output | HTML dashboard (one-off) | Obsidian Daily Notes (cumulative) |
+| Analysis | Quantitative (tokens, tool counts, code volume) | Qualitative (why A over B, what was confusing) |
+| Environment | Inside Claude Code session only | Standalone CLI, runs anywhere |
 
-## 설치
+## Installation
 
-### 원클릭 설치 (macOS Apple Silicon)
+### One-line install (macOS Apple Silicon)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | sh
 ```
 
-### 소스에서 빌드
+### Build from source
 
 ```bash
 cargo install --git https://github.com/gigagookbob/rwd.git
 ```
 
-> macOS에서 "개발자를 확인할 수 없습니다" 경고가 뜨면:
+> If macOS shows "unidentified developer" warning:
 > ```bash
 > xattr -d com.apple.quarantine /usr/local/bin/rwd
 > ```
 
-## 설정
+## Setup
 
 ```bash
 rwd init
 ```
 
-API 키와 출력 경로를 설정합니다. Obsidian vault가 있으면 자동 감지됩니다.
-설정은 `~/.config/rwd/config.toml`에 저장됩니다.
+Sets up your API key, output path, and language preference. Obsidian vault is auto-detected if available.
+Config is stored at `~/.config/rwd/config.toml`.
 
-### 설정 변경
+### Change settings
 
 ```bash
-rwd config output-path /path/to/vault    # 출력 경로 변경
-rwd config provider openai               # LLM 프로바이더 변경
-rwd config api-key sk-...                # API 키 변경
+rwd config output-path /path/to/vault    # Change output path
+rwd config provider openai               # Change LLM provider
+rwd config api-key sk-...                # Change API key
+rwd config lang ko                       # Change output language (en/ko)
 ```
 
-### 민감 정보 마스킹
+### Sensitive data masking
 
-`rwd today` 실행 시 세션 로그의 민감 정보(API 키, 토큰, 사설 IP 등)를 자동으로 마스킹한 후 LLM에 전송합니다. 기본 활성 상태이며, 비활성화하려면 `~/.config/rwd/config.toml`에 다음을 추가하세요:
+When running `rwd today`, sensitive data in session logs (API keys, tokens, private IPs, etc.) is automatically masked before sending to the LLM. Enabled by default. To disable, add to `~/.config/rwd/config.toml`:
 
 ```toml
 [redactor]
 enabled = false
 ```
 
-## 사용법
+## Usage
 
 ```bash
-rwd today       # 오늘의 AI Agent 세션 분석 → Obsidian Daily Notes 저장
-rwd summary     # 개발 진척사항 요약 (Markdown) → Obsidian 저장 + 클립보드 복사
-rwd slack       # 슬랙 공유용 메시지 생성 → 클립보드 복사
-rwd config      # 설정 변경 (대화형 메뉴)
-rwd update      # 최신 버전으로 업데이트
+rwd today              # Analyze today's AI sessions → save to Obsidian Daily Notes
+rwd today --lang ko    # Override output language for this run
+rwd summary            # Generate progress summary (Markdown) → save + copy to clipboard
+rwd slack              # Generate Slack-ready message → copy to clipboard
+rwd config             # Change settings (interactive menu)
+rwd update             # Update to the latest version
 ```
 
-## 삭제
+## Uninstall
 
 ```bash
-# rwd 바이너리 삭제
+# Remove rwd binary
 sh -c 'rm "$(command -v rwd)"'
 
-# 설정/데이터도 완전히 삭제하려면:
+# Also remove config/data:
 rm -rf ~/.config/rwd ~/.rwd
 ```
 
-## 라이선스
+## License
 
 MIT

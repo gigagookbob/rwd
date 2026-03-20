@@ -1,57 +1,57 @@
-# Design: 업데이트 체크 캐싱
+# Design: Update Check Caching
 
-## 목적
+## Purpose
 
-모든 rwd 커맨드 실행 시 업데이트 알림을 표시하되, GitHub API 호출을 24시간에 1회로 제한하여 CLI 응답 속도를 유지한다.
+Display update notifications on every rwd command execution, while limiting GitHub API calls to once every 24 hours to maintain CLI response speed.
 
-## 현재 상태
+## Current State
 
-- `notify_if_update_available()`가 `rwd today`에서만 호출됨
-- 매번 GitHub API를 블로킹 호출 (1~2초 지연)
-- `rwd init`, `rwd config`, `rwd summary`에서는 알림 없음
+- `notify_if_update_available()` is only called from `rwd today`
+- Makes a blocking GitHub API call every time (1-2 second delay)
+- No notifications from `rwd init`, `rwd config`, or `rwd summary`
 
-## 설계
+## Design
 
-### 접근 방식
+### Approach
 
-gh (GitHub CLI) 스타일: 스탬프 파일에 마지막 체크 시각 + 최신 버전을 캐싱하고, 24시간 이내면 API 호출을 스킵한다.
+gh (GitHub CLI) style: cache the last check timestamp + latest version in a stamp file, and skip the API call if within 24 hours.
 
-### 변경 파일
+### Changed Files
 
-#### 1. `cache.rs` — 업데이트 체크 캐시 구조체/함수 추가
+#### 1. `cache.rs` — Add update check cache struct/functions
 
 ```rust
 #[derive(Debug, Serialize, Deserialize)]
 pub struct UpdateCheckCache {
-    /// 마지막 체크 시각. chrono의 serde feature로 자동 직렬화/역직렬화.
-    /// DateTime<Utc>를 사용하여 TTL 비교 시 타입 일치를 보장합니다.
+    /// Last check timestamp. Automatically serialized/deserialized via chrono's serde feature.
+    /// Uses DateTime<Utc> to ensure type consistency when comparing TTL.
     pub checked_at: chrono::DateTime<chrono::Utc>,
-    /// 그때 확인한 최신 버전 (예: "0.6.0")
+    /// Latest version found at that time (e.g., "0.6.0")
     pub latest_version: String,
 }
 ```
 
-- `update_check_path() -> Result<PathBuf, CacheError>` — `~/.rwd/cache/update-check.json` 경로 반환 (기존 `cache_path()` 패턴과 일관)
-- `load_update_check() -> Option<UpdateCheckCache>` — 파일 읽기. 파일 없음/손상 시 None 반환 (조용히 재생성)
-- `save_update_check(cache: &UpdateCheckCache) -> Result<(), CacheError>` — 파일 쓰기
-- 기존 `cache_dir()` (`~/.rwd/cache/`)을 재사용
+- `update_check_path() -> Result<PathBuf, CacheError>` — returns `~/.rwd/cache/update-check.json` path (consistent with existing `cache_path()` pattern)
+- `load_update_check() -> Option<UpdateCheckCache>` — reads the file. Returns None on missing/corrupted files (silently regenerates)
+- `save_update_check(cache: &UpdateCheckCache) -> Result<(), CacheError>` — writes the file
+- Reuses existing `cache_dir()` (`~/.rwd/cache/`)
 
-#### 2. `update.rs` — `notify_if_update_available()` 캐시 로직 적용
+#### 2. `update.rs` — Apply cache logic to `notify_if_update_available()`
 
 ```
-1. cache::load_update_check() 호출
-2. 캐시가 있고, checked_at이 24시간 이내? (UTC 기준 비교 — 타임존 변경에 영향받지 않도록)
-   → YES: 캐시의 latest_version과 CURRENT_VERSION 비교 → 알림
-   → NO:  GitHub API 호출 → cache::save_update_check() → 알림
-3. API 호출 실패 시 → 조용히 무시 (현재와 동일)
-4. 캐시 저장 실패 시 → 조용히 무시 (API 실패와 동일하게 처리)
+1. Call cache::load_update_check()
+2. Cache exists and checked_at is within 24 hours? (UTC comparison — unaffected by timezone changes)
+   → YES: Compare cached latest_version with CURRENT_VERSION → notify
+   → NO:  Call GitHub API → cache::save_update_check() → notify
+3. API call failure → silently ignore (same as current behavior)
+4. Cache save failure → silently ignore (treated same as API failure)
 ```
 
-#### 3. `main.rs` — 모든 커맨드에서 호출
+#### 3. `main.rs` — Call from all commands
 
-- `match` 분기 앞에서 `notify_if_update_available()` 호출
-- `Commands::Update`일 때는 스킵 (중복 알림 방지)
-- `run_today()` 내부의 기존 호출 제거
+- Call `notify_if_update_available()` before the `match` branch
+- Skip for `Commands::Update` (prevent duplicate notifications)
+- Remove existing call inside `run_today()`
 
 ```rust
 if !matches!(args.command, Commands::Update) {
@@ -59,14 +59,14 @@ if !matches!(args.command, Commands::Update) {
 }
 ```
 
-### 변경하지 않는 것
+### What Stays Unchanged
 
-- `check_latest_version()` — 기존 GitHub API 호출 로직 그대로
-- `run_update()` — 기존 셀프 업데이트 로직 그대로 (단, 성공 시 캐시를 현재 버전으로 갱신하여 업데이트 직후 잘못된 알림 방지)
-- 알림 방식 — 기존 stderr 출력 유지
-- 옵트아웃 — 지금은 추가하지 않음 (필요 시 나중에)
+- `check_latest_version()` — existing GitHub API call logic remains as-is
+- `run_update()` — existing self-update logic remains as-is (however, on success, update the cache to the current version to prevent false notifications right after update)
+- Notification method — keep existing stderr output
+- Opt-out — not adding it now (can add later if needed)
 
-### 캐시 파일 예시
+### Cache File Example
 
 `~/.rwd/cache/update-check.json`:
 
@@ -77,13 +77,13 @@ if !matches!(args.command, Commands::Update) {
 }
 ```
 
-### 추후 개선 (이 설계 범위 밖)
+### Future Improvements (Outside This Design's Scope)
 
-- 네트워크 타임아웃 설정 (현재 reqwest 기본값 사용)
+- Network timeout configuration (currently using reqwest defaults)
 
-## 조사 배경
+## Research Background
 
-gh, npm, rustup, brew, claude 등 주요 CLI 도구 조사 결과:
-- 대부분 24시간 주기 캐싱 + 논블로킹 체크 패턴 사용
-- rwd는 하루 수회 사용이므로 24시간 블로킹 체크(캐시 히트 시 즉시)가 적정선
-- 완전 논블로킹(백그라운드 프로세스)은 현재 사용 빈도 대비 과잉 설계
+Survey of major CLI tools including gh, npm, rustup, brew, and claude:
+- Most use a 24-hour cache cycle + non-blocking check pattern
+- Since rwd is used a few times per day, a 24-hour blocking check (instant on cache hit) is the right balance
+- Fully non-blocking (background process) is over-engineering for the current usage frequency

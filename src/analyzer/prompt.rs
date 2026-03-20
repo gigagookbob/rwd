@@ -1,33 +1,30 @@
-// LogEntry 슬라이스를 Claude API에 보낼 프롬프트 텍스트로 변환하는 모듈.
+// Converts LogEntry slices into prompt text for LLM analysis.
 //
-// 네트워크 호출 없이 순수 데이터 변환만 수행하므로 단위 테스트가 용이합니다.
-// Text 블록만 포함하고, Thinking/ToolUse/ToolResult는 제외합니다 (너무 장황하므로).
+// Pure data transformation with no network calls, making it easy to unit-test.
+// Only Text blocks are included; Thinking/ToolUse/ToolResult are excluded (too verbose).
 
 use super::planner::SessionEstimate;
 use crate::parser::claude::{ContentBlock, LogEntry};
 use crate::parser::codex::CodexEntry;
 use std::collections::HashMap;
 
-/// LogEntry 슬라이스를 받아 Claude API에 보낼 프롬프트 텍스트를 생성합니다.
-/// 세션별로 그룹화하여 [Session: id] 헤더와 [USER]/[ASSISTANT] 태그를 붙입니다.
+/// Builds prompt text from a LogEntry slice for the Claude API.
+/// Groups by session with [Session: id] headers and [USER]/[ASSISTANT] tags.
 pub fn build_prompt(entries: &[LogEntry]) -> Result<String, super::AnalyzerError> {
     let conversation_text = extract_conversation_text(entries);
     if conversation_text.is_empty() {
-        return Err("로그 엔트리에서 대화 내용을 찾을 수 없습니다.".into());
+        return Err(crate::messages::error::NO_CONVERSATION_CLAUDE.into());
     }
     Ok(conversation_text)
 }
 
-/// LogEntry에서 사람이 읽을 수 있는 대화 텍스트를 추출합니다.
+/// Extracts human-readable conversation text from LogEntries.
 ///
-/// HashMap으로 세션별 메시지를 그룹화한 뒤, 각 세션을 텍스트로 변환합니다.
-/// Vec<(timestamp, role, text)> 형태로 저장하여 시간순 정렬을 유지합니다.
+/// Groups messages by session using a HashMap, then converts each session to text.
+/// Uses Vec<(role, text)> to maintain chronological order.
 fn extract_conversation_text(entries: &[LogEntry]) -> String {
-    // 세션별로 메시지를 그룹화합니다.
-    // 튜플의 첫 번째 요소(timestamp)는 정렬용이지만, JSONL이 이미 시간순이므로
-    // 순서를 유지하기 위해 Vec을 사용합니다.
     let mut sessions: HashMap<&str, Vec<(&str, String)>> = HashMap::new();
-    // 세션 순서를 보존하기 위한 벡터 (HashMap은 순서를 보장하지 않습니다).
+    // Preserves session insertion order (HashMap does not guarantee order).
     let mut session_order: Vec<&str> = Vec::new();
 
     for entry in entries {
@@ -59,12 +56,11 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
                     }
                 }
             }
-            // Progress, System, FileHistorySnapshot, Other는 대화 내용이 아니므로 건너뜁니다.
+            // Skip non-conversation entries (Progress, System, FileHistorySnapshot, Other).
             _ => {}
         }
     }
 
-    // 각 세션을 텍스트로 변환합니다.
     let mut output = String::new();
     for session_id in &session_order {
         if let Some(messages) = sessions.get(session_id) {
@@ -79,26 +75,21 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
     output
 }
 
-/// UserEntry의 message (serde_json::Value)에서 텍스트를 추출합니다.
+/// Extracts text from a UserEntry's message (serde_json::Value).
 ///
-/// Claude Code 로그에서 user message는 두 가지 형태입니다:
-/// 1. {"role":"user","content":"텍스트"} — content가 문자열
-/// 2. {"role":"user","content":[{"type":"text","text":"텍스트"}]} — content가 배열
-///
-/// serde_json::Value의 .as_str()는 문자열이면 Some(&str), 아니면 None을 반환합니다.
-/// .as_array()는 배열이면 Some(&Vec<Value>), 아니면 None을 반환합니다.
+/// Claude Code user messages come in two forms:
+/// 1. {"role":"user","content":"text"} -- content is a string
+/// 2. {"role":"user","content":[{"type":"text","text":"text"}]} -- content is an array
 fn extract_user_text(value: &serde_json::Value) -> Option<String> {
     let content = value.get("content")?;
 
-    // content가 문자열인 경우
-    // let chains로 조건을 결합합니다 (Rust 2024 Edition).
     if let Some(text) = content.as_str()
         && !text.is_empty()
     {
         return Some(text.to_string());
     }
 
-    // content가 배열인 경우 — 텍스트 블록만 추출하여 결합
+    // Content is an array -- extract and join text blocks.
     if let Some(blocks) = content.as_array() {
         let texts: Vec<&str> = blocks
             .iter()
@@ -118,16 +109,14 @@ fn extract_user_text(value: &serde_json::Value) -> Option<String> {
     None
 }
 
-/// AssistantEntry의 ContentBlock들에서 텍스트를 추출합니다.
+/// Extracts text from AssistantEntry ContentBlocks.
 ///
-/// Text 블록만 포함하고 Thinking, ToolUse, ToolResult는 건너뜁니다.
-/// Thinking은 모델의 내부 추론이고, ToolUse/ToolResult는 너무 장황하여
-/// 인사이트 추출에 노이즈가 됩니다.
+/// Only includes Text blocks; skips Thinking, ToolUse, and ToolResult
+/// as they add noise without contributing to insight extraction.
 fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
     let texts: Vec<&str> = blocks
         .iter()
         .filter_map(|block| {
-            // if let으로 Text variant만 매칭합니다 (Rust Book Ch.6.3 참조).
             if let ContentBlock::Text { text } = block {
                 text.as_deref()
             } else {
@@ -139,8 +128,8 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
     texts.join("\n")
 }
 
-/// LogEntry에서 (role, text) 튜플 목록을 추출한다.
-/// summarizer의 split_into_chunks에서 사용한다.
+/// Extracts (role, text) tuples from LogEntries.
+/// Used by summarizer's split_into_chunks.
 pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for entry in entries {
@@ -164,8 +153,8 @@ pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
     messages
 }
 
-/// Codex 엔트리들을 LLM 분석용 대화 텍스트로 변환합니다.
-/// Codex는 파일 하나가 세션 하나이므로, session_id를 외부에서 전달받습니다.
+/// Converts Codex entries into prompt text for LLM analysis.
+/// Each Codex file is a single session, so session_id is passed externally.
 pub fn build_codex_prompt(
     entries: &[CodexEntry],
     session_id: &str,
@@ -184,24 +173,20 @@ pub fn build_codex_prompt(
         }
     }
 
-    // 세션 헤더만 있고 대화 내용이 없는 경우
+    // Only session header present with no conversation content.
     if !output.contains("[USER]") && !output.contains("[ASSISTANT]") {
-        return Err("Codex 로그에서 대화 내용을 찾을 수 없습니다.".into());
+        return Err(crate::messages::error::NO_CONVERSATION_CODEX.into());
     }
 
     Ok(output)
 }
 
-/// LogEntry 슬라이스에서 고유한 세션 ID 목록을 추출합니다.
-/// 등장 순서를 유지하며 중복을 제거합니다.
-/// fallback 시 세션별로 엔트리를 분할하기 위해 사용합니다.
+/// Extracts unique session IDs from LogEntries, preserving insertion order.
+/// Used to split entries by session during fallback execution.
 pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
     let mut ids = Vec::new();
     let mut seen = std::collections::HashSet::new();
     for entry in entries {
-        // User/Assistant/Progress는 session_id: String
-        // System은 session_id: Option<String>
-        // FileHistorySnapshot은 session_id 필드가 없음
         let id = match entry {
             LogEntry::User(e) => Some(e.session_id.as_str()),
             LogEntry::Assistant(e) => Some(e.session_id.as_str()),
@@ -218,16 +203,16 @@ pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
     ids
 }
 
-/// 시스템 프롬프트의 추정 토큰 수 (provider::SYSTEM_PROMPT 기준 사전 계산).
+/// Pre-computed estimated token count of the system prompt (provider::SYSTEM_PROMPT).
 pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 800;
 
-/// 텍스트의 토큰 수를 간이 추정한다.
-/// 한국어는 음절당 ~1토큰이므로, 글자 수 ÷ 2는 보수적 추정이다.
+/// Rough token estimate for text.
+/// Korean syllables are ~1 token each, so char_count / 2 is a conservative estimate.
 pub fn estimate_tokens(text: &str) -> u64 {
     (text.chars().count() as u64) / 2
 }
 
-/// 세션별 토큰 추정 결과를 반환한다.
+/// Returns per-session token estimates.
 pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
     let session_ids = extract_session_ids(entries);
     let mut estimates = Vec::new();
@@ -236,7 +221,6 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
         let mut total_chars: u64 = 0;
 
         for entry in entries {
-            // 해당 세션의 엔트리만 필터링
             let eid = match entry {
                 LogEntry::User(u) => Some(u.session_id.as_str()),
                 LogEntry::Assistant(a) => Some(a.session_id.as_str()),
@@ -250,7 +234,6 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
 
             match entry {
                 LogEntry::User(e) => {
-                    // extract_user_text로 실제 대화 텍스트만 추출 (JSON 구조 문자 제외)
                     if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
                         total_chars += text.chars().count() as u64;
                     }
@@ -361,7 +344,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_ids_중복_제거_순서_유지() {
+    fn test_extract_session_ids_dedup_preserves_order() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
                 r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"첫번째"}}"#,
@@ -378,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_session_ids_빈_엔트리_빈_결과() {
+    fn test_extract_session_ids_empty_entries_empty_result() {
         let entries: Vec<LogEntry> = vec![];
         let ids = extract_session_ids(&entries);
         assert!(ids.is_empty());
@@ -393,22 +376,22 @@ mod tests {
     }
 
     #[test]
-    fn test_estimate_tokens_한국어() {
+    fn test_estimate_tokens_korean() {
         assert_eq!(super::estimate_tokens("안녕하세요"), 2);
     }
 
     #[test]
-    fn test_estimate_tokens_영어() {
+    fn test_estimate_tokens_english() {
         assert_eq!(super::estimate_tokens("hello world"), 5);
     }
 
     #[test]
-    fn test_estimate_tokens_빈문자열() {
+    fn test_estimate_tokens_empty_string() {
         assert_eq!(super::estimate_tokens(""), 0);
     }
 
     #[test]
-    fn test_estimate_sessions_세션별_추정() {
+    fn test_estimate_sessions_per_session() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
                 r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":"안녕하세요 반갑습니다"}}"#,
