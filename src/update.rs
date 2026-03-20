@@ -100,14 +100,8 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     let archive_path = tmp_dir.join(&asset_name);
     std::fs::write(&archive_path, &bytes)?;
 
-    // Extract tar.gz
-    let status = std::process::Command::new("tar")
-        .args(["-xzf", &archive_path.to_string_lossy(), "-C", &tmp_dir.to_string_lossy()])
-        .status()?;
-
-    if !status.success() {
-        return Err(crate::messages::error::EXTRACT_FAILED.into());
-    }
+    // Extract archive
+    extract_archive(&archive_path, &tmp_dir)?;
 
     // Find extracted binary
     let extracted = find_binary_in_dir(&tmp_dir)?;
@@ -139,18 +133,52 @@ fn detect_asset_name() -> Result<String, Box<dyn std::error::Error>> {
         ("macos", "aarch64") => "rwd-aarch64-apple-darwin.tar.gz",
         ("macos", "x86_64") => "rwd-x86_64-apple-darwin.tar.gz",
         ("linux", "x86_64") => "rwd-x86_64-unknown-linux-gnu.tar.gz",
+        ("windows", "x86_64") => "rwd-x86_64-pc-windows-msvc.zip",
         _ => return Err(crate::messages::error::unsupported_platform(os, arch).into()),
     };
     Ok(name.to_string())
 }
 
+/// Extracts the downloaded archive (tar.gz on Unix, zip on Windows).
+fn extract_archive(
+    archive: &std::path::Path,
+    dest: &std::path::Path,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let archive_str = archive.to_string_lossy();
+
+    if archive_str.ends_with(".zip") {
+        let status = std::process::Command::new("powershell")
+            .args([
+                "-NoProfile",
+                "-Command",
+                &format!(
+                    "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
+                    archive_str,
+                    dest.to_string_lossy()
+                ),
+            ])
+            .status()?;
+        if !status.success() {
+            return Err(crate::messages::error::EXTRACT_FAILED.into());
+        }
+    } else {
+        let status = std::process::Command::new("tar")
+            .args(["-xzf", &archive_str, "-C", &dest.to_string_lossy()])
+            .status()?;
+        if !status.success() {
+            return Err(crate::messages::error::EXTRACT_FAILED.into());
+        }
+    }
+    Ok(())
+}
+
 /// Finds the rwd binary in a directory.
 fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    let binary_name = if cfg!(windows) { "rwd.exe" } else { "rwd" };
     for entry in std::fs::read_dir(dir)?.flatten() {
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
-        // Binary starts with "rwd" and is not tar.gz
-        if name.starts_with("rwd") && !name.ends_with(".tar.gz") && path.is_file() {
+        if name == binary_name && path.is_file() {
             return Ok(path);
         }
     }
@@ -173,16 +201,22 @@ fn replace_binary(
     match std::fs::copy(new_binary, target) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            // Retry with sudo
-            eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
-            let status = std::process::Command::new("sudo")
-                .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
-                .status()?;
-            if status.success() {
-                Ok(())
-            } else {
-                Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
+            #[cfg(unix)]
+            {
+                // Retry with sudo
+                eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
+                let status = std::process::Command::new("sudo")
+                    .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
+                    .status()?;
+                if status.success() {
+                    return Ok(());
+                }
             }
+            #[cfg(windows)]
+            {
+                eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
+            }
+            Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
         }
         Err(e) => Err(e.into()),
     }
