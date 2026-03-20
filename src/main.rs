@@ -78,6 +78,12 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Slack => {
+            if let Err(e) = run_slack().await {
+                eprintln!("Error: {e}");
+                std::process::exit(1);
+            }
+        }
     }
 }
 
@@ -258,6 +264,57 @@ async fn run_summary() -> Result<(), Box<dyn std::error::Error>> {
 
     // 클립보드에 복사합니다.
     copy_to_clipboard(&summary);
+    println!("\n클립보드에 복사되었습니다.");
+
+    Ok(())
+}
+
+/// 슬랙 공유용 메시지를 생성합니다.
+///
+/// run_summary()와 동일하게 캐시에서 work_summary를 수집하지만,
+/// SLACK_PROMPT를 사용하여 슬랙에 바로 붙여넣을 수 있는 형식으로 변환합니다.
+/// Obsidian 저장은 하지 않고 터미널 출력 + 클립보드 복사만 수행합니다.
+async fn run_slack() -> Result<(), Box<dyn std::error::Error>> {
+    let today = chrono::Local::now().date_naive();
+
+    // 캐시가 없으면 today 분석을 먼저 실행합니다.
+    let cached = match cache::load_cache(today) {
+        Some(c) => c,
+        None => {
+            println!("캐시가 없습니다. today 분석을 먼저 실행합니다...");
+            run_today(false).await?;
+            match cache::load_cache(today) {
+                Some(c) => c,
+                None => {
+                    eprintln!("분석 후에도 캐시를 찾을 수 없습니다.");
+                    std::process::exit(1);
+                }
+            }
+        }
+    };
+
+    // 모든 세션 work_summary를 하나의 텍스트로 합칩니다.
+    let mut summaries_text = String::new();
+    for (source_name, analysis) in &cached.sources {
+        for session in &analysis.sessions {
+            summaries_text.push_str(&format!(
+                "[{source_name} / {}] {}\n",
+                session.session_id, session.work_summary
+            ));
+        }
+    }
+
+    if summaries_text.is_empty() {
+        println!("요약할 세션이 없습니다.");
+        return Ok(());
+    }
+
+    println!("슬랙 공유 메시지 생성 중...");
+    let slack_message = analyzer::analyze_slack(&summaries_text).await?;
+
+    println!("\n{slack_message}");
+
+    copy_to_clipboard(&slack_message);
     println!("\n클립보드에 복사되었습니다.");
 
     Ok(())

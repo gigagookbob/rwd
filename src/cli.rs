@@ -36,4 +36,6 @@ pub enum Commands {
     Update,
     /// 오늘의 개발 진척사항 요약을 생성합니다
     Summary,
+    /// 슬랙 공유용 메시지를 생성합니다
+    Slack,
 }
