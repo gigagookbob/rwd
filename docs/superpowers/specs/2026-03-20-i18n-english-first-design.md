@@ -176,7 +176,7 @@ Rename from Korean `test_동작_조건_기대결과` to English `test_behavior_c
 | docs/MILESTONES.md | Translate (remove learning points, keep as milestone record) |
 | docs/LEARNING_GUIDE.md | **Delete** |
 | docs/superpowers/specs/*.md (8 existing) | Translate (this spec excluded — already English) |
-| docs/superpowers/plans/*.md (8) | Translate |
+| docs/superpowers/plans/*.md (7) | Translate |
 
 ### 8. CLAUDE.md Split
 
