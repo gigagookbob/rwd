@@ -1,5 +1,3 @@
-// All items are unused until Task 2 replaces Korean strings with these references.
-//
 // src/messages.rs
 //
 // Centralized user-facing string constants and parameterized message functions.
@@ -33,6 +31,10 @@ pub mod init {
 
     pub fn output_path_set(path: &dyn std::fmt::Display) -> String {
         format!("Output path: {path}")
+    }
+
+    pub fn unsupported_provider(name: &str) -> String {
+        format!("Unsupported provider: {name}")
     }
 
     pub fn config_saved(path: &dyn std::fmt::Display) -> String {
@@ -143,6 +145,10 @@ pub mod error {
     pub const API_NO_TEXT_BLOCK: &str = "No text block in API response";
     pub const OPENAI_EMPTY_CHOICES: &str =
         "OpenAI response has empty choices";
+
+    /// Substring used by `analyzer/mod.rs` to detect JSON parse errors for retry logic.
+    /// Must be a prefix of the message produced by `json_parse_failed()`.
+    pub const JSON_PARSE_FAILED_MARKER: &str = "LLM response JSON parse failed";
 
     pub fn json_parse_failed(
         e: &dyn std::fmt::Display,
@@ -344,6 +350,20 @@ pub mod display {
     pub fn summary_line(work_summary: &str) -> String {
         format!("  Summary: {}", work_summary)
     }
+
+    pub fn session_count_with_tokens(
+        count: usize,
+        total_in: &str,
+        total_out: &str,
+    ) -> String {
+        format!("Sessions: {count}  in {total_in}  out {total_out}")
+    }
+
+    pub fn session_count(count: usize) -> String {
+        format!("Sessions: {count}")
+    }
+
+    pub const NO_SESSIONS: &str = "No sessions";
 }
 
 /// Markdown section headers used in `src/output/markdown.rs`.
@@ -356,6 +376,8 @@ pub mod markdown {
     pub const CORRECTIONS_HEADER: &str = "### Model Errors & Corrections";
     pub const CORRECTION_MODEL: &str = "**Model**";
     pub const CORRECTION_FIX: &str = "**Fix**";
+    /// Section header for development progress in daily Markdown files.
+    pub const PROGRESS_SECTION_HEADER: &str = "## Development Progress";
 }
 
 /// API key verification messages.

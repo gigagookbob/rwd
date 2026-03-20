@@ -101,7 +101,7 @@ pub async fn call_openai_api(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::openai_api_request_failed(&status, &error_body).into());
     }
 
     let chat_response: ChatResponse = response.json().await?;
@@ -111,7 +111,7 @@ pub async fn call_openai_api(
     let text = chat_response
         .choices
         .first()
-        .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
+        .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
 
     Ok(text.message.content.clone())
 }
@@ -149,13 +149,13 @@ pub async fn call_openai_api_with_max_tokens(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("OpenAI API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::openai_api_request_failed(&status, &error_body).into());
     }
     let chat_response: ChatResponse = response.json().await?;
     let text = chat_response
         .choices
         .first()
-        .ok_or("OpenAI 응답에 choices가 비어 있습니다")?;
+        .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
     Ok(text.message.content.clone())
 }
 

@@ -72,10 +72,10 @@ pub fn render_markdown(analysis: &AnalysisResult, date: NaiveDate) -> String {
 /// &mut String은 가변 참조로, 함수 안에서 문자열에 내용을 추가할 수 있습니다 (Rust Book Ch.4 참조).
 fn render_session(md: &mut String, session: &SessionInsight) {
     md.push_str(&format!("## Session: {}\n\n", session.session_id));
-    md.push_str(&format!("### 작업 요약\n{}\n\n", session.work_summary));
+    md.push_str(&format!("{}\n{}\n\n", crate::messages::markdown::WORK_SUMMARY_HEADER, session.work_summary));
 
     if !session.decisions.is_empty() {
-        md.push_str("### 주요 의사결정\n");
+        md.push_str(&format!("{}\n", crate::messages::markdown::DECISIONS_HEADER));
         for d in &session.decisions {
             md.push_str(&format!("- **{}**: {}\n", d.what, d.why));
         }
@@ -83,7 +83,7 @@ fn render_session(md: &mut String, session: &SessionInsight) {
     }
 
     if !session.curiosities.is_empty() {
-        md.push_str("### 궁금했던 것 / 헷갈렸던 것\n");
+        md.push_str(&format!("{}\n", crate::messages::markdown::CURIOSITIES_HEADER));
         for c in &session.curiosities {
             md.push_str(&format!("- {c}\n"));
         }
@@ -91,9 +91,9 @@ fn render_session(md: &mut String, session: &SessionInsight) {
     }
 
     if !session.corrections.is_empty() {
-        md.push_str("### 모델 오류 및 수정\n");
+        md.push_str(&format!("{}\n", crate::messages::markdown::CORRECTIONS_HEADER));
         for c in &session.corrections {
-            md.push_str(&format!("- **모델**: {}\n  **수정**: {}\n", c.model_said, c.user_corrected));
+            md.push_str(&format!("- {}: {}\n  {}: {}\n", crate::messages::markdown::CORRECTION_MODEL, c.model_said, crate::messages::markdown::CORRECTION_FIX, c.user_corrected));
         }
         md.push('\n');
     }
@@ -156,7 +156,7 @@ mod tests {
 
         assert!(md.contains("# 2026-03-11 Dev Session Review"));
         assert!(md.contains("## Session: test-session-1"));
-        assert!(md.contains("### 작업 요약\n파서 모듈 구현"));
+        assert!(md.contains("### Work Summary\n파서 모듈 구현"));
     }
 
     #[test]
@@ -164,7 +164,7 @@ mod tests {
         let analysis = make_test_analysis();
         let md = render_markdown(&analysis, test_date());
 
-        assert!(md.contains("### 주요 의사결정"));
+        assert!(md.contains("### Key Decisions"));
         assert!(md.contains("- **serde 사용**: 자동 역직렬화가 편리"));
     }
 
@@ -182,7 +182,7 @@ mod tests {
         };
         let md = render_markdown(&analysis, test_date());
 
-        assert!(!md.contains("### 주요 의사결정"));
+        assert!(!md.contains("### Key Decisions"));
     }
 
     #[test]

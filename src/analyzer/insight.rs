@@ -112,11 +112,7 @@ pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerE
             .char_indices()
             .nth(200)
             .map_or(raw_text.len(), |(idx, _)| idx);
-        format!(
-            "LLM 응답 JSON 파싱 실패: {e}\n응답 내용 (처음 200자): {}",
-            &raw_text[..preview_end]
-        )
-        .into()
+        crate::messages::error::json_parse_failed(&e, &raw_text[..preview_end]).into()
     })
 }
 

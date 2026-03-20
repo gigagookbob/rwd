@@ -78,7 +78,7 @@ pub async fn summarize_chunks(
             .collect::<Vec<_>>()
             .join("\n");
 
-        let sp = super::start_spinner(format!("청크 {}/{total} 요약 중...", i + 1));
+        let sp = super::start_spinner(crate::messages::status::chunk_summarizing(i + 1, total));
 
         // 요약 API 호출 (max_tokens: 2000)
         let summary = provider
@@ -90,7 +90,7 @@ pub async fn summarize_chunks(
             )
             .await?;
         super::stop_spinner(sp);
-        eprintln!("    ✓ 청크 {}/{total} 완료", i + 1);
+        eprintln!("{}", crate::messages::status::chunk_done(i + 1, total));
         summaries.push(summary);
 
         // rate pacing: 마지막 청크가 아니면 카운트다운 대기

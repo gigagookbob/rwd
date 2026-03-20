@@ -13,7 +13,7 @@ use std::collections::HashMap;
 pub fn build_prompt(entries: &[LogEntry]) -> Result<String, super::AnalyzerError> {
     let conversation_text = extract_conversation_text(entries);
     if conversation_text.is_empty() {
-        return Err("로그 엔트리에서 대화 내용을 찾을 수 없습니다.".into());
+        return Err(crate::messages::error::NO_CONVERSATION_CLAUDE.into());
     }
     Ok(conversation_text)
 }
@@ -186,7 +186,7 @@ pub fn build_codex_prompt(
 
     // 세션 헤더만 있고 대화 내용이 없는 경우
     if !output.contains("[USER]") && !output.contains("[ASSISTANT]") {
-        return Err("Codex 로그에서 대화 내용을 찾을 수 없습니다.".into());
+        return Err(crate::messages::error::NO_CONVERSATION_CODEX.into());
     }
 
     Ok(output)

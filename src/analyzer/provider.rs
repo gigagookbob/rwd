@@ -245,7 +245,7 @@ impl LlmProvider {
 /// 튜플은 서로 다른 타입의 값을 묶는 간단한 방법입니다 (Rust Book Ch.3.2).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
     let config = crate::config::load_config_if_exists()
-        .ok_or("설정 파일이 없습니다. `rwd init`을 먼저 실행해 주세요.")?;
+        .ok_or(crate::messages::error::NO_CONFIG)?;
 
     let provider = match config.llm.provider.as_str() {
         "openai" => LlmProvider::OpenAi,

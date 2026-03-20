@@ -92,7 +92,7 @@ pub async fn call_anthropic_api(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::api_request_failed(&status, &error_body).into());
     }
 
     let api_response: ApiResponse = response.json().await?;
@@ -104,7 +104,7 @@ pub async fn call_anthropic_api(
         .iter()
         .find(|block| block.block_type == "text")
         .and_then(|block| block.text.as_deref())
-        .ok_or("API 응답에 텍스트 블록이 없습니다")?;
+        .ok_or(crate::messages::error::API_NO_TEXT_BLOCK)?;
 
     Ok(text.to_string())
 }
@@ -139,7 +139,7 @@ pub async fn call_anthropic_api_with_max_tokens(
     let status = response.status();
     if !status.is_success() {
         let error_body = response.text().await.unwrap_or_default();
-        return Err(format!("API 요청 실패 ({status}): {error_body}").into());
+        return Err(crate::messages::error::api_request_failed(&status, &error_body).into());
     }
     let api_response: ApiResponse = response.json().await?;
     let text = api_response
@@ -147,7 +147,7 @@ pub async fn call_anthropic_api_with_max_tokens(
         .iter()
         .find(|block| block.block_type == "text")
         .and_then(|block| block.text.as_deref())
-        .ok_or("API 응답에 텍스트 블록이 없습니다")?;
+        .ok_or(crate::messages::error::API_NO_TEXT_BLOCK)?;
     Ok(text.to_string())
 }
 
