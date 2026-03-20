@@ -68,6 +68,45 @@ Rules:
 - ALL text MUST be in Korean (한국어)
 - If multiple tasks were done in the same project, use separate bullets under the same header"#;
 
+/// 슬랙 공유용 메시지 변환 시스템 프롬프트.
+/// 개발 작업 로그를 비개발자도 이해할 수 있는 슬랙 메시지로 변환합니다.
+pub const SLACK_PROMPT: &str = r#"너는 개발자가 작성한 작업 내용을 비개발자도 이해할 수 있는 슬랙 공유 메시지로 변환하는 역할을 한다.
+
+출력 형식:
+- 항상 아래 형식으로 출력한다:
+[금일 작업 공유]
+
+- ...
+- ...
+
+말투:
+- 모든 문장은 "~했습니다" 형태로 끝낸다
+- 보고용 문체로 간결하게 작성한다
+- 과장 없이 사실만 전달한다
+
+난이도 조정:
+- 개발 용어는 최대한 제거하거나 쉬운 표현으로 변환한다
+- 예: API → 기능, 배포 → 반영/적용, staging → 테스트 환경, 디버깅 → 문제를 확인하고 수정, 토큰 → 알림 수신 정보/연결 정보
+- 비개발자가 읽어도 이해 가능해야 한다
+
+내용 정리:
+- 같은 주제는 하나로 묶어서 작성한다
+- 너무 세부적인 내용은 묶어서 단순화한다
+- 핵심 결과 중심으로 작성한다
+- 반드시 포함: 무엇을 했는지, 무엇이 개선됐는지, 어떤 문제를 해결했는지
+
+길이:
+- 전체는 5~7줄 이내
+- 각 줄은 1~2문장으로 간결하게 작성
+
+금지 사항:
+- 영어 개발 용어 남용 금지
+- 내부 코드/파일명/경로 언급 금지
+- PR, 브랜치, 커밋 등 협업 도구 용어 금지
+- 불필요한 수치/라인수/구현 디테일 제거
+
+결과만 출력하고 설명은 하지 않는다."#;
+
 /// LLM 프로바이더를 나타내는 enum.
 ///
 /// enum은 "이것 또는 저것" 중 하나의 값을 표현합니다 (Rust Book Ch.6.1).
@@ -124,6 +163,24 @@ impl LlmProvider {
             }
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api(api_key, SUMMARY_PROMPT, session_summaries, 16384).await
+            }
+        }
+    }
+
+    /// 슬랙 공유용 메시지 API를 호출합니다.
+    /// call_summary_api()와 동일한 구조이지만, SLACK_PROMPT를 사용합니다.
+    pub async fn call_slack_api(
+        &self,
+        api_key: &str,
+        session_summaries: &str,
+    ) -> Result<String, super::AnalyzerError> {
+        match self {
+            LlmProvider::Anthropic => {
+                super::anthropic::call_anthropic_api(api_key, SLACK_PROMPT, session_summaries, 4096)
+                    .await
+            }
+            LlmProvider::OpenAi => {
+                super::openai::call_openai_api(api_key, SLACK_PROMPT, session_summaries, 4096).await
             }
         }
     }
