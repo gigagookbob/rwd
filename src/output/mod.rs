@@ -1,9 +1,8 @@
-// output 모듈은 분석 결과를 Markdown 파일로 변환하여 Obsidian vault에 저장하는 역할을 합니다.
-// parser, analyzer 모듈과 같은 디렉토리 구조를 사용합니다 (Rust Book Ch.7 참조).
+// Converts analysis results to Markdown and saves them to the Obsidian vault.
 
 pub mod markdown;
 
-// M5에서 thiserror로 전용 에러 타입을 만들 예정입니다.
+// TODO: Replace with a dedicated error type via thiserror.
 pub type OutputError = Box<dyn std::error::Error>;
 
 pub use markdown::render_combined_markdown;
@@ -12,10 +11,7 @@ use std::path::{Path, PathBuf};
 
 use chrono::NaiveDate;
 
-/// Obsidian vault 경로를 설정 파일(~/.config/rwd/config.toml)에서 읽습니다.
-///
-/// PathBuf는 소유권을 가진 경로 타입입니다 — String이 &str의 소유 버전인 것처럼,
-/// PathBuf는 &Path의 소유 버전입니다 (Rust Book Ch.12 참조).
+/// Loads the Obsidian vault path from config (~/.config/rwd/config.toml).
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
     let config = crate::config::load_config_if_exists()
         .ok_or(crate::messages::error::NO_CONFIG)?;
@@ -27,22 +23,16 @@ pub fn load_vault_path() -> Result<PathBuf, OutputError> {
     Ok(path)
 }
 
-/// 날짜 기반 파일명으로 Markdown 내용을 vault에 저장합니다.
-///
-/// Path::join()은 경로와 파일명을 결합하여 새 PathBuf를 반환합니다 (Rust Book Ch.12 참조).
-/// std::fs::write()는 파일 내용 전체를 한 번에 기록합니다 — 파일이 없으면 생성하고, 있으면 덮어씁니다.
-/// 날짜 기반 파일명으로 Markdown 내용을 출력 경로에 저장합니다.
-/// output.path가 이미 최종 폴더(예: vault/Daily)를 포함하므로, 추가 하위 폴더를 붙이지 않습니다.
+/// Saves Markdown content to the output path with a date-based filename.
+/// The output.path is expected to be the final directory (e.g., vault/Daily),
+/// so no additional subdirectories are appended.
 pub fn save_to_vault(
     vault_path: &Path,
     date: NaiveDate,
     content: &str,
 ) -> Result<PathBuf, OutputError> {
-    // create_dir_all()은 경로의 모든 중간 디렉토리를 재귀적으로 생성합니다 —
-    // 이미 존재하면 에러 없이 넘어갑니다 (Rust Book Ch.12 참조).
     std::fs::create_dir_all(vault_path)?;
 
-    // 파일명: "2026-03-11.md" — NaiveDate의 Display 트레이트가 "YYYY-MM-DD" 형식을 제공합니다.
     let filename = format!("{date}.md");
     let file_path = vault_path.join(&filename);
 
@@ -58,27 +48,23 @@ mod tests {
 
     #[test]
     fn test_save_to_vault_파일생성_확인() {
-        // std::env::temp_dir()는 OS의 임시 디렉토리 경로를 반환합니다.
-        // 테스트 격리를 위해 고유한 하위 디렉토리를 만듭니다.
         let temp_dir = std::env::temp_dir().join("rwd_test_output");
-        std::fs::create_dir_all(&temp_dir).expect("임시 디렉토리 생성 실패");
+        std::fs::create_dir_all(&temp_dir).expect("failed to create temp dir");
 
-        let date = NaiveDate::from_ymd_opt(2026, 3, 11).expect("유효한 날짜");
+        let date = NaiveDate::from_ymd_opt(2026, 3, 11).expect("valid date");
         let content = "# 테스트 Markdown";
 
         let result = save_to_vault(&temp_dir, date, content);
         assert!(result.is_ok());
 
-        let saved_path = result.expect("저장 성공");
+        let saved_path = result.expect("save succeeded");
         assert!(saved_path.exists());
-        // 지정한 경로에 직접 저장되었는지 확인
         assert!(saved_path.starts_with(&temp_dir));
         assert_eq!(
-            std::fs::read_to_string(&saved_path).expect("파일 읽기"),
+            std::fs::read_to_string(&saved_path).expect("read file"),
             content
         );
 
-        // 테스트 후 정리
         std::fs::remove_file(&saved_path).ok();
         std::fs::remove_dir(&temp_dir).ok();
     }
