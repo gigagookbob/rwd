@@ -62,6 +62,9 @@ Write-Host "rwd $Version installed!"
 Write-Host "Location: $InstallDir\$BinaryName"
 Write-Host "Default output: $DefaultOutput"
 Write-Host ""
+Write-Host "NOTE: Restart your terminal for 'rwd' to be available." -ForegroundColor Yellow
+Write-Host "  Or run directly now: $InstallDir\$BinaryName --version" -ForegroundColor Yellow
+Write-Host ""
 Write-Host "Get started:"
 Write-Host "  rwd init     # Initial setup (API key, output path)"
 Write-Host "  rwd today    # Analyze today's sessions"
