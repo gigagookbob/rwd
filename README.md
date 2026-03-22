@@ -26,6 +26,12 @@ rwd answers **"What did I decide today, and why?"** — it extracts decisions, c
 curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | sh
 ```
 
+### One-line install (Windows)
+
+```powershell
+irm https://raw.githubusercontent.com/gigagookbob/rwd/main/install.ps1 | iex
+```
+
 ### Build from source
 
 ```bash
