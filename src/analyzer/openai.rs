@@ -25,6 +25,17 @@ struct ChatMessage {
 #[derive(Deserialize)]
 struct ChatResponse {
     choices: Vec<Choice>,
+    #[serde(default)]
+    usage: Option<UsageInfo>,
+}
+
+/// Token usage from the API response.
+#[derive(Deserialize)]
+struct UsageInfo {
+    #[serde(default)]
+    prompt_tokens: u64,
+    #[serde(default)]
+    completion_tokens: u64,
 }
 
 /// A single choice from the choices array.
@@ -45,7 +56,7 @@ pub async fn call_openai_api(
     system_prompt: &str,
     conversation_text: &str,
     max_tokens: u32,
-) -> Result<String, super::AnalyzerError> {
+) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
     let client = reqwest::Client::new();
 
     let request_body = ChatRequest {
@@ -79,12 +90,17 @@ pub async fn call_openai_api(
 
     let chat_response: ChatResponse = response.json().await?;
 
+    let usage = chat_response.usage.map(|u| super::ApiUsage {
+        input_tokens: u.prompt_tokens,
+        output_tokens: u.completion_tokens,
+    }).unwrap_or_default();
+
     let text = chat_response
         .choices
         .first()
         .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
 
-    Ok(text.message.content.clone())
+    Ok((text.message.content.clone(), usage))
 }
 
 /// API call variant with explicit max_tokens.
@@ -93,7 +109,7 @@ pub async fn call_openai_api_with_max_tokens(
     system_prompt: &str,
     conversation_text: &str,
     max_tokens: u32,
-) -> Result<String, super::AnalyzerError> {
+) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
     let client = reqwest::Client::new();
     let request_body = ChatRequest {
         model: MODEL.to_string(),
@@ -123,11 +139,17 @@ pub async fn call_openai_api_with_max_tokens(
         return Err(crate::messages::error::openai_api_request_failed(&status, &error_body).into());
     }
     let chat_response: ChatResponse = response.json().await?;
+
+    let usage = chat_response.usage.map(|u| super::ApiUsage {
+        input_tokens: u.prompt_tokens,
+        output_tokens: u.completion_tokens,
+    }).unwrap_or_default();
+
     let text = chat_response
         .choices
         .first()
         .ok_or(crate::messages::error::OPENAI_EMPTY_CHOICES)?;
-    Ok(text.message.content.clone())
+    Ok((text.message.content.clone(), usage))
 }
 
 /// Sends a minimal request to probe rate limits from response headers.

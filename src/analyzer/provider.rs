@@ -53,7 +53,7 @@ impl LlmProvider {
         conversation_text: &str,
         max_tokens: u32,
         lang: &Lang,
-    ) -> Result<String, super::AnalyzerError> {
+    ) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
         let prompt = get_system_prompt(lang);
         match self {
             LlmProvider::Anthropic => {
@@ -72,7 +72,7 @@ impl LlmProvider {
         api_key: &str,
         session_summaries: &str,
         lang: &Lang,
-    ) -> Result<String, super::AnalyzerError> {
+    ) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
         let prompt = get_summary_prompt(lang);
         match self {
             LlmProvider::Anthropic => {
@@ -91,7 +91,7 @@ impl LlmProvider {
         api_key: &str,
         session_summaries: &str,
         lang: &Lang,
-    ) -> Result<String, super::AnalyzerError> {
+    ) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
         let prompt = get_slack_prompt(lang);
         match self {
             LlmProvider::Anthropic => {
@@ -111,7 +111,7 @@ impl LlmProvider {
         system_prompt: &str,
         conversation_text: &str,
         max_tokens: u32,
-    ) -> Result<String, super::AnalyzerError> {
+    ) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
         match self {
             LlmProvider::Anthropic => {
                 super::anthropic::call_anthropic_api_with_max_tokens(

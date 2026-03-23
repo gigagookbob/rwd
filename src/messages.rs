@@ -437,3 +437,32 @@ pub mod background {
         format!("Analysis failed. Check {log_path}")
     }
 }
+
+/// Messages for verbose (-v) diagnostic output.
+pub mod verbose {
+    pub fn discover_stats(projects: usize, files: usize, total: usize, today: usize) -> String {
+        format!("[discover] {projects} projects, {files} log files scanned \u{2192} {today} entries today (of {total} total)")
+    }
+
+    pub fn step_done_detail(
+        i: usize, total: usize, session_id: &str,
+        secs: f64, input: u64, output: u64,
+    ) -> String {
+        format!(
+            "\u{2713} [{i}/{total}] {short} done in {secs:.1}s (input: {input} / output: {output})",
+            short = if session_id.len() >= 8 { &session_id[..8] } else { session_id },
+        )
+    }
+
+    pub fn api_done_single(secs: f64, input: u64, output: u64) -> String {
+        format!("\u{2713} Done in {secs:.1}s (input: {input} / output: {output})")
+    }
+
+    pub fn cache_saved(path: &dyn std::fmt::Display, size_kb: f64) -> String {
+        format!("Cache saved: {path} ({size_kb:.1} KB)")
+    }
+
+    pub fn markdown_file_size(path: &dyn std::fmt::Display, size_kb: f64) -> String {
+        format!("Markdown size: {path} ({size_kb:.1} KB)")
+    }
+}
