@@ -175,6 +175,9 @@ pub mod error {
         format!("File save failed: {e}")
     }
 
+    pub fn download_failed(status: u16) -> String {
+        format!("Download failed (HTTP {status}). Release assets may not be ready yet — try again shortly.")
+    }
     pub const EXTRACT_FAILED: &str = "Extraction failed";
     pub const BINARY_NOT_FOUND: &str =
         "Update binary not found";
