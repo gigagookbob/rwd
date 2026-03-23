@@ -66,6 +66,9 @@ fn print_update_notice(latest_version: &str) {
 
 /// Performs self-update: fetch latest binary from GitHub and replace current executable.
 pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
+    // Clean up leftover from previous Windows update
+    cleanup_old_binary();
+
     let latest = check_latest_version().await?;
 
     if latest == CURRENT_VERSION {
@@ -185,7 +188,20 @@ fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::err
     Err(crate::messages::error::BINARY_NOT_FOUND.into())
 }
 
+/// Cleans up leftover `.old` binary from a previous Windows update.
+fn cleanup_old_binary() {
+    let Ok(current_exe) = std::env::current_exe() else {
+        return;
+    };
+    let old_path = current_exe.with_extension("exe.old");
+    if old_path.exists() {
+        std::fs::remove_file(&old_path).ok();
+    }
+}
+
 /// Replaces the current binary with a new one.
+// `return` inside #[cfg(windows)] block is required — clippy can't see across cfg boundaries.
+#[allow(clippy::needless_return)]
 fn replace_binary(
     new_binary: &std::path::Path,
     target: &std::path::Path,
@@ -197,13 +213,31 @@ fn replace_binary(
         std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
     }
 
-    // May need elevated privileges for /usr/local/bin
-    match std::fs::copy(new_binary, target) {
-        Ok(_) => Ok(()),
-        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-            #[cfg(unix)]
-            {
-                // Retry with sudo
+    // On Windows, rename the running exe first (Windows allows rename but not overwrite).
+    #[cfg(windows)]
+    {
+        let old_path = target.with_extension("exe.old");
+        // Remove leftover from previous update
+        if old_path.exists() {
+            std::fs::remove_file(&old_path).ok();
+        }
+        std::fs::rename(target, &old_path)?;
+        return match std::fs::copy(new_binary, target) {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // Rollback: restore original binary
+                std::fs::rename(&old_path, target).ok();
+                Err(e.into())
+            }
+        };
+    }
+
+    // Unix: direct copy, with sudo fallback for system-wide installs
+    #[cfg(unix)]
+    {
+        match std::fs::copy(new_binary, target) {
+            Ok(_) => Ok(()),
+            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
                 eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
                 let status = std::process::Command::new("sudo")
                     .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
@@ -211,13 +245,9 @@ fn replace_binary(
                 if status.success() {
                     return Ok(());
                 }
+                Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
             }
-            #[cfg(windows)]
-            {
-                eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
-            }
-            Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
+            Err(e) => Err(e.into()),
         }
-        Err(e) => Err(e.into()),
     }
 }
