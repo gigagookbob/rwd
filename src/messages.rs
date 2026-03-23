@@ -434,3 +434,20 @@ pub mod lang {
         format!("Unsupported language: {lang}")
     }
 }
+
+/// Messages for background execution mode.
+pub mod background {
+    pub const ALREADY_RUNNING: &str = "Analysis is already running.";
+    pub const NOTIFIED_WHEN_DONE: &str = "You'll be notified when it's done!";
+    pub const NOTIFY_TITLE: &str = "rwd";
+    pub const NOTIFY_SUCCESS: &str = "Analysis complete! Saved to Obsidian.";
+    pub const NOTIFY_SOUND: &str = "Blow";
+
+    pub fn starting(pid: u32) -> String {
+        format!("Starting analysis in background...  \x1b[2m(pid: {pid})\x1b[0m")
+    }
+
+    pub fn notify_failure(log_path: &dyn std::fmt::Display) -> String {
+        format!("Analysis failed. Check {log_path}")
+    }
+}
