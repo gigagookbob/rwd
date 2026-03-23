@@ -123,10 +123,6 @@ pub mod error {
         format!("Update failed: {e}")
     }
 
-    pub fn unsupported_provider(name: &str) -> String {
-        format!("Unsupported provider: {name}")
-    }
-
     pub fn unsupported_platform(os: &str, arch: &str) -> String {
         format!("Unsupported platform: {os}-{arch}")
     }
@@ -195,7 +191,6 @@ pub mod status {
     pub const SUMMARY_HEADER: &str = "=== Development Progress ===";
     pub const SLACK_GENERATING: &str = "Generating Slack message...";
     pub const COPIED_TO_CLIPBOARD: &str = "Copied to clipboard.";
-    pub const NO_SESSIONS_CODEX: &str = "No sessions";
     pub const PROBING_RATE_LIMITS: &str = "Checking API rate limits...";
     pub const ANALYZING_INSIGHT: &str = "Analyzing insights...";
 
@@ -218,18 +213,6 @@ pub mod status {
 
     pub fn markdown_saved(path: &dyn std::fmt::Display) -> String {
         format!("Markdown saved: {path}")
-    }
-
-    pub fn session_count(count: usize) -> String {
-        format!("Sessions: {count}")
-    }
-
-    pub fn session_count_with_tokens(
-        count: usize,
-        total_in: &str,
-        total_out: &str,
-    ) -> String {
-        format!("Sessions: {count}  in {total_in}  out {total_out}")
     }
 
     pub fn countdown_waiting(remaining: u64) -> String {
@@ -342,7 +325,6 @@ pub mod status {
 
 /// Labels for `rwd today --verbose` output sections.
 pub mod display {
-    pub const SUMMARY_LABEL: &str = "Summary";
     pub const DECISIONS_LABEL: &str = "Key Decisions";
     pub const CURIOSITIES_LABEL: &str = "Questions & Curiosities";
     pub const CORRECTIONS_LABEL: &str = "Model Corrections";
@@ -432,5 +414,26 @@ pub mod lang {
 
     pub fn unsupported(lang: &str) -> String {
         format!("Unsupported language: {lang}")
+    }
+}
+
+/// Messages for background execution mode.
+pub mod background {
+    pub const ALREADY_RUNNING: &str = "Analysis is already running.";
+    pub const NOTIFIED_WHEN_DONE: &str = "You'll be notified when it's done!";
+    pub const NOTIFY_TITLE: &str = "rwd";
+    pub const NOTIFY_SUCCESS: &str = "Your daily rewind is ready!";
+    pub const NOTIFY_SOUND: &str = "Blow";
+
+    pub fn starting(pid: u32) -> String {
+        format!("Starting analysis in background...  \x1b[2m(pid: {pid})\x1b[0m")
+    }
+
+    pub fn results_path(path: &dyn std::fmt::Display) -> String {
+        format!("Results will be saved to: {path}")
+    }
+
+    pub fn notify_failure(log_path: &dyn std::fmt::Display) -> String {
+        format!("Analysis failed. Check {log_path}")
     }
 }
