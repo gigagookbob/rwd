@@ -178,7 +178,9 @@ pub mod error {
     pub const EXTRACT_FAILED: &str = "Extraction failed";
     pub const BINARY_NOT_FOUND: &str =
         "Update binary not found";
+    #[cfg(unix)]
     pub const BINARY_REPLACE_FAILED: &str = "Binary replacement failed";
+    #[cfg(unix)]
     pub const ADMIN_REQUIRED: &str = "Administrator privileges required.";
 }
 
@@ -423,6 +425,7 @@ pub mod background {
     pub const NOTIFIED_WHEN_DONE: &str = "You'll be notified when it's done!";
     pub const NOTIFY_TITLE: &str = "rwd";
     pub const NOTIFY_SUCCESS: &str = "Your daily rewind is ready!";
+    #[cfg(target_os = "macos")]
     pub const NOTIFY_SOUND: &str = "Blow";
 
     pub fn starting(pid: u32) -> String {
