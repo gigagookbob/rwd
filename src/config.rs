@@ -1,7 +1,7 @@
 // Handles config file (~/.config/rwd/config.toml) read/write.
 
 use dialoguer::theme::ColorfulTheme;
-use dialoguer::{Confirm, Input, Select};
+use dialoguer::{Confirm, Select};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -226,6 +226,43 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
 }
 
 /// Reads a password with Esc support. Esc returns None (cancel), Enter returns the input.
+/// Reads a visible text input with Esc-to-cancel support.
+/// Returns `None` if user presses Escape, `Some(default)` if Enter on empty input.
+fn read_input_with_esc(prompt: &str, default: &str) -> Result<Option<String>, ConfigError> {
+    use console::{Key, Term};
+    let term = Term::stderr();
+    eprint!("{prompt}");
+    let mut input = String::new();
+    loop {
+        match term.read_key()? {
+            Key::Escape => {
+                term.write_line("")?;
+                return Ok(None);
+            }
+            Key::Enter => {
+                term.write_line("")?;
+                let value = if input.is_empty() {
+                    default.to_string()
+                } else {
+                    input
+                };
+                return Ok(Some(value));
+            }
+            Key::Backspace => {
+                if !input.is_empty() {
+                    input.pop();
+                    term.clear_chars(1)?;
+                }
+            }
+            Key::Char(c) if !c.is_ascii_control() => {
+                input.push(c);
+                eprint!("{c}");
+            }
+            _ => {}
+        }
+    }
+}
+
 fn read_password_with_esc(prompt: &str) -> Result<Option<String>, ConfigError> {
     use console::{Key, Term};
     let term = Term::stderr();
@@ -401,8 +438,8 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 let confirmed = Confirm::with_theme(&theme)
                     .with_prompt(crate::messages::config::CONFIRM_API_KEY)
                     .default(false)
-                    .interact()?;
-                if !confirmed {
+                    .interact_opt()?;
+                if confirmed != Some(true) {
                     continue;
                 }
                 let old_masked = mask_api_key(&config.llm.api_key);
@@ -418,10 +455,13 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             // output-path
             2 => {
                 let old = config.output.path.clone();
-                let new_path: String = Input::with_theme(&theme)
-                    .with_prompt(crate::messages::config::OUTPUT_PATH)
-                    .default(old.clone())
-                    .interact_text()?;
+                let prompt = format!(
+                    "  {} ({old}): ",
+                    crate::messages::config::OUTPUT_PATH
+                );
+                let Some(new_path) = read_input_with_esc(&prompt, &old)? else {
+                    continue;
+                };
 
                 if new_path == old {
                     eprintln!("{dim}{}{reset}\n", crate::messages::config::NO_CHANGE);
@@ -498,14 +538,18 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
 }
 
 /// Reads vault path from Obsidian's app config (obsidian.json).
-/// macOS: ~/Library/Application Support/obsidian/obsidian.json
+/// macOS:   ~/Library/Application Support/obsidian/obsidian.json
+/// Windows: %APPDATA%/obsidian/obsidian.json
+/// Linux:   ~/.config/obsidian/obsidian.json
 fn detect_vault_from_obsidian_json() -> Option<PathBuf> {
-    let home = dirs::home_dir()?;
-    let json_path = home
-        .join("Library")
-        .join("Application Support")
-        .join("obsidian")
-        .join("obsidian.json");
+    let base = if cfg!(target_os = "macos") {
+        dirs::home_dir()?.join("Library").join("Application Support")
+    } else if cfg!(target_os = "windows") {
+        dirs::config_dir()? // %APPDATA%
+    } else {
+        dirs::home_dir()?.join(".config")
+    };
+    let json_path = base.join("obsidian").join("obsidian.json");
 
     let content = std::fs::read_to_string(&json_path).ok()?;
     let json: serde_json::Value = serde_json::from_str(&content).ok()?;
