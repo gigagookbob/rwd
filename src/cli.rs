@@ -20,6 +20,9 @@ pub enum Commands {
         /// Override output language (en/ko)
         #[arg(long)]
         lang: Option<String>,
+        /// Internal: run as background worker (hidden from help)
+        #[arg(long, hide = true)]
+        worker: bool,
     },
     /// Run initial setup (API key, output path)
     Init,
