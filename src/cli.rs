@@ -20,6 +20,9 @@ pub enum Commands {
         /// Override output language (en/ko)
         #[arg(long)]
         lang: Option<String>,
+        /// Run in background with OS notification on completion
+        #[arg(long, short)]
+        background: bool,
         /// Internal: run as background worker (hidden from help)
         #[arg(long, hide = true)]
         worker: bool,
