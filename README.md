@@ -1,6 +1,6 @@
 # rwd (rewind)
 
-CLI tool that analyzes AI coding session logs, extracts daily development insights, and saves them as Markdown to your Obsidian vault.
+CLI that turns your AI agent sessions into a daily journal. Extracts decisions, learnings, and corrections, then saves them as Obsidian Daily Notes.
 
 ## rwd vs Claude Code `/insights`
 
