@@ -26,15 +26,15 @@ async fn main() {
     let args = cli::Cli::parse();
 
     // Show update notification only for synchronous commands.
-    // Background mode (default `today`) and worker mode skip this to avoid blocking.
+    // Worker mode skips this to avoid blocking (no terminal).
     let skip_update = matches!(args.command, Commands::Update)
-        || matches!(args.command, Commands::Today { verbose: false, .. });
+        || matches!(args.command, Commands::Today { worker: true, .. });
     if !skip_update {
         update::notify_if_update_available().await;
     }
 
     match args.command {
-        Commands::Today { verbose, lang, worker } => {
+        Commands::Today { verbose, lang, background, worker } => {
             if worker {
                 if let Err(e) = run_worker(lang).await {
                     let log_path = worker_log_path();
@@ -48,13 +48,13 @@ async fn main() {
                     );
                     std::process::exit(1);
                 }
-            } else if verbose {
-                if let Err(e) = run_today(true, lang).await {
+            } else if background {
+                if let Err(e) = spawn_worker(&lang) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
             } else {
-                if let Err(e) = spawn_worker(&lang) {
+                if let Err(e) = run_today(verbose, lang).await {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }

@@ -3,9 +3,10 @@
 ## Core Flow
 
 ```
-rwd today:    CLI entry → log file discovery → JSONL parsing & structuring → LLM API call → Markdown generation → Obsidian Vault save
-rwd summary:  CLI entry → cache load → collect work_summaries → LLM API (SUMMARY_PROMPT) → Obsidian save + clipboard copy
-rwd slack:    CLI entry → cache load → collect work_summaries → LLM API (SLACK_PROMPT) → clipboard copy
+rwd today:       CLI entry → log file discovery → JSONL parsing & structuring → LLM API call → Markdown generation → Obsidian Vault save
+rwd today -b:    CLI entry → spawn background worker → exit immediately → OS notification on completion
+rwd summary:     CLI entry → cache load → collect work_summaries → LLM API (SUMMARY_PROMPT) → Obsidian save + clipboard copy
+rwd slack:       CLI entry → cache load → collect work_summaries → LLM API (SLACK_PROMPT) → clipboard copy
 ```
 
 ## Extracted Insights
@@ -92,3 +93,4 @@ rwd/
 | `tokio`      | Async runtime        |
 | `chrono`     | Date/time handling   |
 | `dialoguer`  | Interactive prompts  |
+| `notify-rust`| OS notifications     |
