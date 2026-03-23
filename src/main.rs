@@ -31,7 +31,7 @@ async fn main() {
     }
 
     match args.command {
-        Commands::Today { verbose, lang } => {
+        Commands::Today { verbose, lang, worker: _ } => {
             if let Err(e) = run_today(verbose, lang).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
