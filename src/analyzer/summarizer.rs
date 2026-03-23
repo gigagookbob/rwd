@@ -83,7 +83,7 @@ pub async fn summarize_chunks(
 
         let sp = super::start_spinner(crate::messages::status::chunk_summarizing(i + 1, total));
 
-        let summary = provider
+        let (summary, _usage) = provider
             .call_api_with_max_tokens(
                 api_key,
                 get_chunk_summarize_prompt(lang),

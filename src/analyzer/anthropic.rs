@@ -27,6 +27,17 @@ struct ApiMessage {
 #[derive(Deserialize)]
 struct ApiResponse {
     content: Vec<ApiContentBlock>,
+    #[serde(default)]
+    usage: Option<UsageInfo>,
+}
+
+/// Token usage from the API response.
+#[derive(Deserialize)]
+struct UsageInfo {
+    #[serde(default)]
+    input_tokens: u64,
+    #[serde(default)]
+    output_tokens: u64,
 }
 
 /// A content block in the response.
@@ -44,7 +55,7 @@ pub async fn call_anthropic_api(
     system_prompt: &str,
     conversation_text: &str,
     max_tokens: u32,
-) -> Result<String, super::AnalyzerError> {
+) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
     let client = reqwest::Client::new();
 
     let request_body = ApiRequest {
@@ -74,6 +85,11 @@ pub async fn call_anthropic_api(
 
     let api_response: ApiResponse = response.json().await?;
 
+    let usage = api_response.usage.map(|u| super::ApiUsage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+    }).unwrap_or_default();
+
     let text = api_response
         .content
         .iter()
@@ -81,7 +97,7 @@ pub async fn call_anthropic_api(
         .and_then(|block| block.text.as_deref())
         .ok_or(crate::messages::error::API_NO_TEXT_BLOCK)?;
 
-    Ok(text.to_string())
+    Ok((text.to_string(), usage))
 }
 
 /// API call variant with explicit max_tokens. Used to cap output size for summaries.
@@ -90,7 +106,7 @@ pub async fn call_anthropic_api_with_max_tokens(
     system_prompt: &str,
     conversation_text: &str,
     max_tokens: u32,
-) -> Result<String, super::AnalyzerError> {
+) -> Result<(String, super::ApiUsage), super::AnalyzerError> {
     let client = reqwest::Client::new();
     let request_body = ApiRequest {
         model: MODEL.to_string(),
@@ -116,13 +132,19 @@ pub async fn call_anthropic_api_with_max_tokens(
         return Err(crate::messages::error::api_request_failed(&status, &error_body).into());
     }
     let api_response: ApiResponse = response.json().await?;
+
+    let usage = api_response.usage.map(|u| super::ApiUsage {
+        input_tokens: u.input_tokens,
+        output_tokens: u.output_tokens,
+    }).unwrap_or_default();
+
     let text = api_response
         .content
         .iter()
         .find(|block| block.block_type == "text")
         .and_then(|block| block.text.as_deref())
         .ok_or(crate::messages::error::API_NO_TEXT_BLOCK)?;
-    Ok(text.to_string())
+    Ok((text.to_string(), usage))
 }
 
 /// Sends a minimal request to probe rate limits from response headers.
