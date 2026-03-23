@@ -397,8 +397,13 @@ pub mod update {
         format!("Downloading: {url}")
     }
 
+    #[cfg(unix)]
     pub fn update_complete(version: &str) -> String {
         format!("rwd v{version} update complete!")
+    }
+
+    pub fn update_deferred(version: &str) -> String {
+        format!("Finalizing v{version} update...")
     }
 
     pub fn new_version_available(latest: &str, current: &str) -> String {
