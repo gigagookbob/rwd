@@ -66,7 +66,7 @@ fn print_update_notice(latest_version: &str) {
 
 /// Performs self-update: fetch latest binary from GitHub and replace current executable.
 pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
-    // Clean up leftover from previous Windows update
+    // Clean up leftover .old binary from previous rename-based updates
     cleanup_old_binary();
 
     let latest = check_latest_version().await?;
@@ -111,21 +111,32 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // Find extracted binary
     let extracted = find_binary_in_dir(&tmp_dir)?;
 
-    // Replace current executable
     let current_exe = std::env::current_exe()?;
-    replace_binary(&extracted, &current_exe)?;
 
-    // Cleanup
-    std::fs::remove_dir_all(&tmp_dir).ok();
-
-    // Update cache so next run won't show update notice
+    // Update cache before potential process exit (Windows deferred path)
     let cache = crate::cache::UpdateCheckCache {
         checked_at: chrono::Utc::now(),
         latest_version: latest.clone(),
     };
     let _ = crate::cache::save_update_check(&cache);
 
-    eprintln!("{}", crate::messages::update::update_complete(&latest));
+    // On Windows, spawn a helper script and exit so the file lock is released.
+    #[cfg(windows)]
+    {
+        schedule_deferred_replace(&extracted, &current_exe, &latest)?;
+        eprintln!("{}", crate::messages::update::update_deferred(&latest));
+        std::process::exit(0);
+    }
+
+    // On Unix, replace in-place.
+    #[cfg(unix)]
+    {
+        replace_binary_unix(&extracted, &current_exe)?;
+        std::fs::remove_dir_all(&tmp_dir).ok();
+        eprintln!("{}", crate::messages::update::update_complete(&latest));
+    }
+
+    #[allow(unreachable_code)]
     Ok(())
 }
 
@@ -190,7 +201,7 @@ fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::err
     Err(crate::messages::error::BINARY_NOT_FOUND.into())
 }
 
-/// Cleans up leftover `.old` binary from a previous Windows update.
+/// Cleans up leftover `.old` binary from a previous rename-based update.
 fn cleanup_old_binary() {
     let Ok(current_exe) = std::env::current_exe() else {
         return;
@@ -201,55 +212,76 @@ fn cleanup_old_binary() {
     }
 }
 
-/// Replaces the current binary with a new one.
-// `return` inside #[cfg(windows)] block is required — clippy can't see across cfg boundaries.
-#[allow(clippy::needless_return)]
-fn replace_binary(
+/// Windows: writes a batch script that waits for the file lock to release,
+/// then copies the new binary. The script runs after rwd exits.
+#[cfg(windows)]
+fn schedule_deferred_replace(
+    new_binary: &std::path::Path,
+    target: &std::path::Path,
+    version: &str,
+) -> Result<(), Box<dyn std::error::Error>> {
+    use std::os::windows::process::CommandExt;
+
+    let tmp_dir = new_binary
+        .parent()
+        .ok_or("cannot resolve temp directory")?;
+    let script_path = std::env::temp_dir().join("rwd_update.cmd");
+
+    let script = format!(
+        "@echo off\r\n\
+         set retries=0\r\n\
+         :retry\r\n\
+         timeout /t 1 /nobreak >nul\r\n\
+         copy /y \"{source}\" \"{target}\" >nul 2>&1\r\n\
+         if errorlevel 1 (\r\n\
+             set /a retries+=1\r\n\
+             if %retries% geq 30 (\r\n\
+                 echo rwd update failed: could not replace binary after 30s.\r\n\
+                 goto cleanup\r\n\
+             )\r\n\
+             goto retry\r\n\
+         )\r\n\
+         echo rwd v{version} update complete!\r\n\
+         :cleanup\r\n\
+         rmdir /s /q \"{tmp_dir}\" >nul 2>&1\r\n\
+         del \"%~f0\" >nul 2>&1\r\n",
+        source = new_binary.display(),
+        target = target.display(),
+        version = version,
+        tmp_dir = tmp_dir.display(),
+    );
+    std::fs::write(&script_path, &script)?;
+
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    std::process::Command::new("cmd")
+        .args(["/C", &script_path.to_string_lossy()])
+        .creation_flags(CREATE_NO_WINDOW)
+        .spawn()?;
+
+    Ok(())
+}
+
+/// Unix: replaces the current binary in-place, with sudo fallback.
+#[cfg(unix)]
+fn replace_binary_unix(
     new_binary: &std::path::Path,
     target: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    // Set executable permission
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
-    }
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
 
-    // On Windows, rename the running exe first (Windows allows rename but not overwrite).
-    #[cfg(windows)]
-    {
-        let old_path = target.with_extension("exe.old");
-        // Remove leftover from previous update
-        if old_path.exists() {
-            std::fs::remove_file(&old_path).ok();
-        }
-        std::fs::rename(target, &old_path)?;
-        return match std::fs::copy(new_binary, target) {
-            Ok(_) => Ok(()),
-            Err(e) => {
-                // Rollback: restore original binary
-                std::fs::rename(&old_path, target).ok();
-                Err(e.into())
+    match std::fs::copy(new_binary, target) {
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
+            let status = std::process::Command::new("sudo")
+                .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
+                .status()?;
+            if status.success() {
+                return Ok(());
             }
-        };
-    }
-
-    // Unix: direct copy, with sudo fallback for system-wide installs
-    #[cfg(unix)]
-    {
-        match std::fs::copy(new_binary, target) {
-            Ok(_) => Ok(()),
-            Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
-                eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
-                let status = std::process::Command::new("sudo")
-                    .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
-                    .status()?;
-                if status.success() {
-                    return Ok(());
-                }
-                Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
-            }
-            Err(e) => Err(e.into()),
+            Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
         }
+        Err(e) => Err(e.into()),
     }
 }
