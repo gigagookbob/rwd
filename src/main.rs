@@ -38,7 +38,9 @@ async fn main() {
             if worker {
                 if let Err(e) = run_worker(lang).await {
                     let log_path = worker_log_path();
-                    let _ = std::fs::create_dir_all(log_path.parent().unwrap());
+                    if let Some(parent) = log_path.parent() {
+                        let _ = std::fs::create_dir_all(parent);
+                    }
                     let _ = std::fs::write(&log_path, format!("{e}"));
                     send_notification(
                         crate::messages::background::NOTIFY_TITLE,
@@ -163,12 +165,12 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
         args.push("--lang".to_string());
         args.push(lang.clone());
     } else {
-        // Resolve lang from config now (before detaching) to avoid stdin prompt in worker
+        // Resolve lang from config now (before detaching) to avoid stdin prompt in worker.
+        // Fail synchronously if language cannot be resolved.
         let mut loaded_config = config::load_config_if_exists();
-        if let Ok(lang) = resolve_lang(&None, &mut loaded_config) {
-            args.push("--lang".to_string());
-            args.push(lang.to_string());
-        }
+        let lang = resolve_lang(&None, &mut loaded_config)?;
+        args.push("--lang".to_string());
+        args.push(lang.to_string());
     }
 
     let child = std::process::Command::new(exe)
@@ -185,7 +187,9 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
 /// Runs as a background worker: lock, analyze, notify, unlock.
 async fn run_worker(lang: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     let lock_path = worker_lock_path();
-    let _ = std::fs::create_dir_all(lock_path.parent().unwrap());
+    if let Some(parent) = lock_path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
     let result = run_today(false, lang).await;
