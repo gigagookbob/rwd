@@ -181,6 +181,14 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
 
     println!("  {}", crate::messages::background::starting(child.id()));
     println!("  {}", crate::messages::background::NOTIFIED_WHEN_DONE);
+
+    // Show where results will be saved.
+    let today = chrono::Local::now().date_naive();
+    if let Ok(vault_path) = output::load_vault_path() {
+        let file_path = vault_path.join(format!("{today}.md"));
+        println!("  {}", crate::messages::background::results_path(&file_path.display()));
+    }
+
     Ok(())
 }
 
