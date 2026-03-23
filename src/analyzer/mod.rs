@@ -14,6 +14,13 @@ pub type AnalyzerError = Box<dyn std::error::Error>;
 // Re-export commonly used types at the module level.
 pub use insight::AnalysisResult;
 
+/// Token usage returned by LLM API responses.
+#[derive(Debug, Default)]
+pub struct ApiUsage {
+    pub input_tokens: u64,
+    pub output_tokens: u64,
+}
+
 use crate::parser::claude::LogEntry;
 use crate::parser::codex::CodexEntry;
 use crate::redactor::RedactResult;
@@ -136,18 +143,23 @@ pub async fn analyze_entries(
     // 5. Execute analysis
     if plan.is_single_shot {
         let sp = start_spinner(crate::messages::status::ANALYZING_INSIGHT.into());
+        let started = std::time::Instant::now();
         let prompt_text = prompt::build_prompt(entries)?;
         let (final_prompt, redact_result) = if redactor_enabled {
             crate::redactor::redact_text(&prompt_text)
         } else {
             (prompt_text, RedactResult::empty())
         };
-        let raw_response = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32, lang).await?;
+        let (raw_response, usage) = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32, lang).await?;
+        let elapsed = started.elapsed();
         stop_spinner(sp);
+        if verbose {
+            eprintln!("{}", crate::messages::verbose::api_done_single(elapsed.as_secs_f64(), usage.input_tokens, usage.output_tokens));
+        }
         let result = insight::parse_response(&raw_response)?;
         Ok((result, redact_result))
     } else {
-        execute_plan(&plan, entries, &provider, &api_key, redactor_enabled, lang).await
+        execute_plan(&plan, entries, &provider, &api_key, redactor_enabled, verbose, lang).await
     }
 }
 
@@ -165,14 +177,14 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
 /// Generates a development progress summary from concatenated session work_summaries.
 pub async fn analyze_summary(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let raw_response = provider.call_summary_api(&api_key, session_summaries, lang).await?;
+    let (raw_response, _usage) = provider.call_summary_api(&api_key, session_summaries, lang).await?;
     Ok(raw_response)
 }
 
 /// Generates a Slack-ready message from concatenated session work_summaries.
 pub async fn analyze_slack(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let raw_response = provider.call_slack_api(&api_key, session_summaries, lang).await?;
+    let (raw_response, _usage) = provider.call_slack_api(&api_key, session_summaries, lang).await?;
     Ok(raw_response)
 }
 
@@ -190,7 +202,7 @@ pub async fn analyze_codex_entries(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(&api_key, &final_prompt, 1_950, lang).await?;
+    let (raw_response, _usage) = provider.call_api(&api_key, &final_prompt, 1_950, lang).await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -202,6 +214,7 @@ async fn execute_plan(
     provider: &provider::LlmProvider,
     api_key: &str,
     redactor_enabled: bool,
+    verbose: bool,
     lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
     let mut results = Vec::new();
@@ -217,6 +230,7 @@ async fn execute_plan(
 
         // Direct steps use an outer spinner; Summarize steps have their own inner spinner.
         let use_spinner = step.strategy == StepStrategy::Direct;
+        let step_start = std::time::Instant::now();
         let sp = if use_spinner {
             Some(start_spinner(
                 crate::messages::status::step_analyzing(i + 1, total_steps, &step.session_id)
@@ -247,9 +261,17 @@ async fn execute_plan(
         };
 
         match result {
-            Ok((analysis, redact)) => {
+            Ok((analysis, redact, usage)) => {
                 if let Some(h) = sp { stop_spinner(h); }
-                eprintln!("{}", crate::messages::status::step_done(i + 1, total_steps));
+                let elapsed = step_start.elapsed();
+                if verbose {
+                    eprintln!("{}", crate::messages::verbose::step_done_detail(
+                        i + 1, total_steps, &step.session_id,
+                        elapsed.as_secs_f64(), usage.input_tokens, usage.output_tokens,
+                    ));
+                } else {
+                    eprintln!("{}", crate::messages::status::step_done(i + 1, total_steps));
+                }
                 results.push(analysis);
                 total_redact.merge(redact);
             }
@@ -294,7 +316,7 @@ async fn execute_plan(
                     };
 
                     match retry {
-                        Ok((analysis, redact)) => {
+                        Ok((analysis, redact, _usage)) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!("{}", crate::messages::status::step_retry_success(i + 1, total_steps));
                             results.push(analysis);
@@ -335,7 +357,7 @@ async fn execute_plan(
                     };
 
                     match retry {
-                        Ok((analysis, redact)) => {
+                        Ok((analysis, redact, _usage)) => {
                             if let Some(h) = retry_sp { stop_spinner(h); }
                             eprintln!("{}", crate::messages::status::step_reanalysis_success(i + 1, total_steps));
                             results.push(analysis);
@@ -382,16 +404,16 @@ async fn execute_direct_step(
     api_key: &str,
     redactor_enabled: bool,
     lang: &crate::config::Lang,
-) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
+) -> Result<(AnalysisResult, RedactResult, ApiUsage), AnalyzerError> {
     let prompt_text = prompt::build_prompt(entries)?;
     let (final_prompt, redact_result) = if redactor_enabled {
         crate::redactor::redact_text(&prompt_text)
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
     let result = insight::parse_response(&raw_response)?;
-    Ok((result, redact_result))
+    Ok((result, redact_result, usage))
 }
 
 /// Summarize step: splits a large session into chunks, summarizes, then analyzes.
@@ -403,7 +425,7 @@ async fn execute_summarize_step(
     limits: &planner::RateLimits,
     redactor_enabled: bool,
     lang: &crate::config::Lang,
-) -> Result<(AnalysisResult, RedactResult), AnalyzerError> {
+) -> Result<(AnalysisResult, RedactResult, ApiUsage), AnalyzerError> {
     let messages = prompt::extract_messages(entries);
     let chunks =
         summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
@@ -416,7 +438,7 @@ async fn execute_summarize_step(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let raw_response = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
     let result = insight::parse_response(&raw_response)?;
-    Ok((result, redact_result))
+    Ok((result, redact_result, usage))
 }

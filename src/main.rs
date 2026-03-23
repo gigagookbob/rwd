@@ -288,10 +288,20 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
     let today = chrono::Local::now().date_naive();
 
     // === Collect Claude Code logs ===
-    let claude_entries = collect_claude_entries(today);
+    let (claude_entries, claude_discovery) = collect_claude_entries_with_stats(today);
 
     // === Collect Codex logs ===
     let codex_sessions = collect_codex_sessions(today);
+
+    if verbose {
+        let codex_entry_count: usize = codex_sessions.iter().map(|(_, entries)| entries.len()).sum();
+        eprintln!("{}", crate::messages::verbose::discover_stats(
+            claude_discovery.project_count,
+            claude_discovery.file_count,
+            claude_discovery.total_entries,
+            claude_entries.len() + codex_entry_count,
+        ));
+    }
 
     if claude_entries.is_empty() && codex_sessions.is_empty() {
         println!("No log entries found for today ({today}).");
@@ -335,7 +345,7 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
         for (name, analysis) in &source_refs {
             print_insights(name, analysis);
         }
-        save_combined_analysis(&source_refs, today);
+        save_combined_analysis(&source_refs, today, verbose);
         return Ok(());
     }
 
@@ -375,7 +385,7 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
         for (name, analysis) in &source_refs {
             print_insights(name, analysis);
         }
-        save_combined_analysis(&source_refs, today);
+        save_combined_analysis(&source_refs, today, verbose);
 
         // Save analysis results to cache.
         let cache_data = cache::TodayCache {
@@ -386,6 +396,18 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
         };
         if let Err(e) = cache::save_cache(&cache_data, today) {
             eprintln!("{}", crate::messages::error::cache_save_failed(&e));
+        } else if verbose {
+            let cache_path = dirs::home_dir()
+                .expect(crate::messages::error::HOME_DIR_NOT_FOUND)
+                .join(".rwd")
+                .join("cache")
+                .join(format!("today-{today}.json"));
+            if let Ok(meta) = std::fs::metadata(&cache_path) {
+                eprintln!("{}", crate::messages::verbose::cache_saved(
+                    &cache_path.display(),
+                    meta.len() as f64 / 1024.0,
+                ));
+            }
         }
 
         println!("\n{GREEN}{}{RESET}", crate::messages::status::REWIND_DONE);
@@ -585,6 +607,40 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
     }
 }
 
+/// Stats from log discovery (for verbose output).
+struct DiscoveryStats {
+    project_count: usize,
+    file_count: usize,
+    total_entries: usize,
+}
+
+/// Collects Claude Code log entries with discovery statistics.
+fn collect_claude_entries_with_stats(today: chrono::NaiveDate) -> (Vec<parser::claude::LogEntry>, DiscoveryStats) {
+    let mut stats = DiscoveryStats { project_count: 0, file_count: 0, total_entries: 0 };
+
+    if parser::discover_log_dir().is_err() {
+        return (Vec::new(), stats);
+    }
+
+    let mut all_entries = Vec::new();
+    if let Ok(project_dirs) = parser::list_project_dirs() {
+        stats.project_count = project_dirs.len();
+        for project_dir in project_dirs {
+            if let Ok(session_files) = parser::list_session_files(&project_dir) {
+                stats.file_count += session_files.len();
+                for session_file in session_files {
+                    if let Ok(entries) = parser::parse_jsonl_file(&session_file) {
+                        stats.total_entries += entries.len();
+                        let today_entries = parser::filter_entries_by_date(entries, today);
+                        all_entries.extend(today_entries);
+                    }
+                }
+            }
+        }
+    }
+    (all_entries, stats)
+}
+
 /// Collects Claude Code log entries. Returns empty Vec if the log directory is missing.
 fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEntry> {
     match parser::discover_log_dir() {
@@ -706,6 +762,7 @@ fn format_number(n: u64) -> String {
 fn save_combined_analysis(
     sources: &[(&str, &analyzer::AnalysisResult)],
     date: chrono::NaiveDate,
+    verbose: bool,
 ) {
     let vault_path = match output::load_vault_path() {
         Ok(p) => p,
@@ -718,7 +775,17 @@ fn save_combined_analysis(
     let markdown = output::render_combined_markdown(sources, date);
 
     match output::save_to_vault(&vault_path, date, &markdown) {
-        Ok(saved) => println!("\n{}", crate::messages::status::markdown_saved(&saved.display())),
+        Ok(saved) => {
+            println!("\n{}", crate::messages::status::markdown_saved(&saved.display()));
+            if verbose
+                && let Ok(meta) = std::fs::metadata(&saved)
+            {
+                eprintln!("{}", crate::messages::verbose::markdown_file_size(
+                    &saved.display(),
+                    meta.len() as f64 / 1024.0,
+                ));
+            }
+        }
         Err(e) => eprintln!("{}", crate::messages::error::file_save_failed(&e)),
     }
 }
