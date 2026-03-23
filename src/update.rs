@@ -87,13 +87,15 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // Download binary
     eprintln!("{}", crate::messages::update::downloading(&download_url));
     let client = reqwest::Client::new();
-    let bytes = client
+    let resp = client
         .get(&download_url)
         .header("User-Agent", "rwd")
         .send()
-        .await?
-        .bytes()
         .await?;
+    if !resp.status().is_success() {
+        return Err(crate::messages::error::download_failed(resp.status().as_u16()).into());
+    }
+    let bytes = resp.bytes().await?;
 
     // Save to temp and extract
     let tmp_dir = std::env::temp_dir().join("rwd_update");
