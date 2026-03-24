@@ -1,5 +1,6 @@
 /target
-.claude/
+.claude/*
+!.claude/skills/
 .env
 .superpowers/
 firebase-debug.log
