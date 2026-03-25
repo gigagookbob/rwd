@@ -5,6 +5,18 @@ use std::path::PathBuf;
 const REPO: &str = "gigagookbob/rwd";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Returns true if `latest` is strictly newer than `current` using semver.
+/// Falls back to string inequality if either version fails to parse.
+fn is_newer(latest: &str, current: &str) -> bool {
+    match (
+        semver::Version::parse(latest),
+        semver::Version::parse(current),
+    ) {
+        (Ok(l), Ok(c)) => l > c,
+        _ => latest != current,
+    }
+}
+
 /// Fetches the latest release tag from GitHub API.
 pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
@@ -32,7 +44,7 @@ pub async fn notify_if_update_available() {
     if let Some(cached) = crate::cache::load_update_check() {
         let now = chrono::Utc::now();
         let interval = chrono::Duration::hours(24);
-        if cached.latest_version != CURRENT_VERSION
+        if is_newer(&cached.latest_version, CURRENT_VERSION)
             && now - cached.checked_at < interval
         {
             print_update_notice(&cached.latest_version);
@@ -53,9 +65,9 @@ pub async fn notify_if_update_available() {
     }
 }
 
-/// Prints update notice if latest differs from current version.
+/// Prints update notice if latest is strictly newer than current version.
 fn print_update_notice(latest_version: &str) {
-    if latest_version != CURRENT_VERSION {
+    if is_newer(latest_version, CURRENT_VERSION) {
         eprintln!(
             "{}",
             crate::messages::update::new_version_available(latest_version, CURRENT_VERSION)
@@ -71,7 +83,7 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
 
     let latest = check_latest_version().await?;
 
-    if latest == CURRENT_VERSION {
+    if !is_newer(&latest, CURRENT_VERSION) {
         eprintln!("{}", crate::messages::update::already_latest(CURRENT_VERSION));
         return Ok(());
     }
@@ -283,5 +295,42 @@ fn replace_binary_unix(
             Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_newer;
+
+    #[test]
+    fn newer_version_returns_true() {
+        assert!(is_newer("0.12.0", "0.11.4"));
+        assert!(is_newer("1.0.0", "0.99.99"));
+        assert!(is_newer("0.11.5", "0.11.4"));
+    }
+
+    #[test]
+    fn same_version_returns_false() {
+        assert!(!is_newer("0.11.4", "0.11.4"));
+        assert!(!is_newer("1.0.0", "1.0.0"));
+    }
+
+    #[test]
+    fn older_version_returns_false() {
+        assert!(!is_newer("0.11.3", "0.11.4"));
+        assert!(!is_newer("0.5.0", "0.5.1"));
+        assert!(!is_newer("0.10.0", "0.11.0"));
+    }
+
+    #[test]
+    fn prerelease_is_older_than_release() {
+        assert!(!is_newer("0.12.0-beta.1", "0.12.0"));
+        assert!(is_newer("0.12.0", "0.12.0-beta.1"));
+    }
+
+    #[test]
+    fn invalid_version_falls_back_to_string_compare() {
+        assert!(is_newer("not-a-version", "0.11.4"));
+        assert!(!is_newer("same", "same"));
     }
 }
