@@ -1,14 +1,14 @@
 changelog:
   categories:
-    - title: "🚀 Features"
+    - title: "Features"
       labels: ["enhancement"]
-    - title: "🐛 Bug Fixes"
+    - title: "Bug Fixes"
       labels: ["bug"]
-    - title: "⚡ Performance"
+    - title: "Performance"
       labels: ["performance"]
-    - title: "📖 Documentation"
+    - title: "Documentation"
       labels: ["documentation"]
-    - title: "🔧 Maintenance"
+    - title: "Maintenance"
       labels: ["chore", "dependencies"]
     - title: "Other Changes"
       labels: ["*"]
