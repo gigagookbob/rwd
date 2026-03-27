@@ -106,7 +106,7 @@ fn render_til_section(md: &mut String, til_items: &[(&str, &TilItem)]) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::analyzer::insight::{Correction, Decision, SessionInsight, TilItem};
+    use crate::analyzer::insight::{Decision, SessionInsight, TilItem};
 
     /// Helper to create a test AnalysisResult.
     fn make_test_analysis() -> AnalysisResult {

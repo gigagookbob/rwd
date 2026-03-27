@@ -683,12 +683,9 @@ fn collect_codex_sessions(
     let mut sessions = Vec::new();
     for file in session_files {
         if let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) {
-            let session_date = entries.iter().find_map(parser::codex::entry_local_date);
-            if session_date != Some(today) {
-                continue;
-            }
+            let entries = parser::codex::filter_entries_by_local_date(entries, today);
             let summary = parser::codex::summarize_codex_entries(&entries);
-            // Only include sessions with actual conversation
+            // Only include sessions with actual conversation from today
             if summary.user_count > 0 || summary.assistant_count > 0 {
                 sessions.push((summary, entries));
             }
