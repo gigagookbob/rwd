@@ -402,6 +402,7 @@ pub mod update {
         format!("rwd v{version} update complete!")
     }
 
+    #[cfg(windows)]
     pub fn update_deferred(version: &str) -> String {
         format!("Finalizing v{version} update...")
     }

@@ -177,6 +177,22 @@ pub fn entry_local_date(entry: &CodexEntry) -> Option<NaiveDate> {
     Some(ts.with_timezone(&chrono::Local).date_naive())
 }
 
+/// Filters Codex entries to only those belonging to the given local date.
+/// SessionMeta entries are always preserved regardless of date, because
+/// they carry session metadata needed by `summarize_codex_entries`.
+pub fn filter_entries_by_local_date(
+    entries: Vec<CodexEntry>,
+    date: NaiveDate,
+) -> Vec<CodexEntry> {
+    entries
+        .into_iter()
+        .filter(|entry| {
+            matches!(entry, CodexEntry::SessionMeta { .. })
+                || entry_local_date(entry) == Some(date)
+        })
+        .collect()
+}
+
 /// Parses a JSONL file into a vector of CodexEntry.
 /// Skips invalid lines with a warning.
 pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::ParseError> {
@@ -427,5 +443,105 @@ mod tests {
         let parsed: serde_json::Value = serde_json::from_str(json).unwrap();
         let ws = &parsed["sessions"][0]["work_summary"];
         assert!(ws.is_object());
+    }
+
+    #[test]
+    fn test_filter_entries_by_local_date_keeps_today_only() {
+        use chrono::TimeZone;
+        let yesterday_ts = chrono::Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+        let today_ts = chrono::Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap();
+        let today_local = today_ts.with_timezone(&chrono::Local).date_naive();
+
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: yesterday_ts,
+                session_id: "s1".to_string(),
+                cwd: "/p".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: yesterday_ts,
+                text: "old msg".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: yesterday_ts,
+                text: "old reply".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: today_ts,
+                text: "new msg".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: today_ts,
+                text: "new reply".to_string(),
+            },
+        ];
+
+        let filtered = filter_entries_by_local_date(entries, today_local);
+
+        assert_eq!(filtered.len(), 3);
+        assert!(matches!(filtered[0], CodexEntry::SessionMeta { .. }));
+        assert!(matches!(filtered[1], CodexEntry::UserMessage { .. }));
+        if let CodexEntry::UserMessage { text, .. } = &filtered[1] {
+            assert_eq!(text, "new msg");
+        }
+        assert!(matches!(filtered[2], CodexEntry::AssistantMessage { .. }));
+    }
+
+    #[test]
+    fn test_filter_entries_by_local_date_no_today_entries() {
+        use chrono::TimeZone;
+        let yesterday_ts = chrono::Utc.with_ymd_and_hms(2026, 3, 15, 12, 0, 0).unwrap();
+        let today_ts = chrono::Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap();
+        let today_local = today_ts.with_timezone(&chrono::Local).date_naive();
+
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: yesterday_ts,
+                session_id: "s1".to_string(),
+                cwd: "/p".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: yesterday_ts,
+                text: "old msg".to_string(),
+            },
+        ];
+
+        let filtered = filter_entries_by_local_date(entries, today_local);
+
+        assert_eq!(filtered.len(), 1);
+        assert!(matches!(filtered[0], CodexEntry::SessionMeta { .. }));
+    }
+
+    #[test]
+    fn test_filter_entries_by_local_date_same_day_keeps_all() {
+        use chrono::TimeZone;
+        let today_ts = chrono::Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap();
+        let today_local = today_ts.with_timezone(&chrono::Local).date_naive();
+
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: today_ts,
+                session_id: "s1".to_string(),
+                cwd: "/p".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: today_ts,
+                text: "msg".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: today_ts,
+                text: "reply".to_string(),
+            },
+            CodexEntry::FunctionCall {
+                timestamp: today_ts,
+                name: "shell".to_string(),
+            },
+        ];
+
+        let filtered = filter_entries_by_local_date(entries, today_local);
+        assert_eq!(filtered.len(), 4);
     }
 }
