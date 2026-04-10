@@ -1,4 +1,4 @@
-// LLM provider abstraction. Supports Anthropic and OpenAI via a unified enum dispatch.
+// LLM provider abstraction. Supports Anthropic, OpenAI, and Codex CLI.
 // Prompts are loaded from prompts/*.md at compile time via include_str!().
 
 use crate::config::Lang;
@@ -35,6 +35,10 @@ fn get_slack_prompt(lang: &Lang) -> &'static str {
 pub enum LlmProvider {
     Anthropic,
     OpenAi,
+    Codex {
+        model: String,
+        reasoning_effort: String,
+    },
 }
 
 impl LlmProvider {
@@ -43,6 +47,7 @@ impl LlmProvider {
         match self {
             LlmProvider::Anthropic => 32_000,
             LlmProvider::OpenAi => 16_384,
+            LlmProvider::Codex { .. } => 16_384,
         }
     }
 
@@ -63,6 +68,19 @@ impl LlmProvider {
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api(api_key, prompt, conversation_text, max_tokens).await
             }
+            LlmProvider::Codex {
+                model,
+                reasoning_effort,
+            } => {
+                super::codex_exec::call_codex_json_api(
+                    prompt,
+                    conversation_text,
+                    max_tokens,
+                    model,
+                    reasoning_effort,
+                )
+                .await
+            }
         }
     }
 
@@ -82,6 +100,19 @@ impl LlmProvider {
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api(api_key, prompt, session_summaries, 16384).await
             }
+            LlmProvider::Codex {
+                model,
+                reasoning_effort,
+            } => {
+                super::codex_exec::call_codex_text_api(
+                    prompt,
+                    session_summaries,
+                    16_384,
+                    model,
+                    reasoning_effort,
+                )
+                .await
+            }
         }
     }
 
@@ -95,11 +126,23 @@ impl LlmProvider {
         let prompt = get_slack_prompt(lang);
         match self {
             LlmProvider::Anthropic => {
-                super::anthropic::call_anthropic_api(api_key, prompt, session_summaries, 4096)
-                    .await
+                super::anthropic::call_anthropic_api(api_key, prompt, session_summaries, 4096).await
             }
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api(api_key, prompt, session_summaries, 4096).await
+            }
+            LlmProvider::Codex {
+                model,
+                reasoning_effort,
+            } => {
+                super::codex_exec::call_codex_text_api(
+                    prompt,
+                    session_summaries,
+                    4_096,
+                    model,
+                    reasoning_effort,
+                )
+                .await
             }
         }
     }
@@ -115,13 +158,32 @@ impl LlmProvider {
         match self {
             LlmProvider::Anthropic => {
                 super::anthropic::call_anthropic_api_with_max_tokens(
-                    api_key, system_prompt, conversation_text, max_tokens,
+                    api_key,
+                    system_prompt,
+                    conversation_text,
+                    max_tokens,
                 )
                 .await
             }
             LlmProvider::OpenAi => {
                 super::openai::call_openai_api_with_max_tokens(
-                    api_key, system_prompt, conversation_text, max_tokens,
+                    api_key,
+                    system_prompt,
+                    conversation_text,
+                    max_tokens,
+                )
+                .await
+            }
+            LlmProvider::Codex {
+                model,
+                reasoning_effort,
+            } => {
+                super::codex_exec::call_codex_text_api(
+                    system_prompt,
+                    conversation_text,
+                    max_tokens,
+                    model,
+                    reasoning_effort,
                 )
                 .await
             }
@@ -133,22 +195,17 @@ impl LlmProvider {
         match self {
             LlmProvider::Anthropic => "Claude",
             LlmProvider::OpenAi => "OpenAI",
+            LlmProvider::Codex { .. } => "Codex",
         }
     }
 
     /// Probes actual rate limits via a lightweight API call.
     /// Returns (RateLimits, probed) where probed=true means real values, false means defaults.
-    pub async fn probe_rate_limits(
-        &self,
-        api_key: &str,
-    ) -> (super::planner::RateLimits, bool) {
+    pub async fn probe_rate_limits(&self, api_key: &str) -> (super::planner::RateLimits, bool) {
         let result = match self {
-            LlmProvider::Anthropic => {
-                super::anthropic::probe_anthropic_rate_limits(api_key).await
-            }
-            LlmProvider::OpenAi => {
-                super::openai::probe_openai_rate_limits(api_key).await
-            }
+            LlmProvider::Anthropic => super::anthropic::probe_anthropic_rate_limits(api_key).await,
+            LlmProvider::OpenAi => super::openai::probe_openai_rate_limits(api_key).await,
+            LlmProvider::Codex { .. } => None,
         };
         match result {
             Some(limits) => (limits, true),
@@ -159,11 +216,28 @@ impl LlmProvider {
 
 /// Loads the LLM provider and API key from config (~/.config/rwd/config.toml).
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
-    let config = crate::config::load_config_if_exists()
-        .ok_or(crate::messages::error::NO_CONFIG)?;
+    let config = crate::config::load_config_if_exists().ok_or(crate::messages::error::NO_CONFIG)?;
 
     let provider = match config.llm.provider.as_str() {
         "openai" => LlmProvider::OpenAi,
+        "codex" => {
+            let model = config
+                .llm
+                .codex_model
+                .as_deref()
+                .unwrap_or(crate::config::DEFAULT_CODEX_MODEL)
+                .to_string();
+            let reasoning_effort = config
+                .llm
+                .codex_reasoning_effort
+                .as_deref()
+                .unwrap_or(crate::config::DEFAULT_CODEX_REASONING_EFFORT)
+                .to_string();
+            LlmProvider::Codex {
+                model,
+                reasoning_effort,
+            }
+        }
         _ => LlmProvider::Anthropic,
     };
     Ok((provider, config.llm.api_key))
