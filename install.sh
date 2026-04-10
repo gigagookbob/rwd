@@ -15,8 +15,15 @@ REPO="gigagookbob/rwd"
 INSTALL_DIR="/usr/local/bin"
 BINARY_NAME="rwd"
 
-# Fetch latest release tag
-VERSION=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+# Fetch latest release tag.
+# GitHub API may return a compact one-line JSON payload, so extract only the
+# "tag_name" field value to avoid accidentally capturing keys like "mentions_count".
+VERSION=$(
+    curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" \
+        | grep -oE '"tag_name"[[:space:]]*:[[:space:]]*"[^"]+"' \
+        | head -n1 \
+        | sed -E 's/^"tag_name"[[:space:]]*:[[:space:]]*"([^"]+)"$/\1/'
+)
 
 if [ -z "$VERSION" ]; then
     echo "Error: Failed to fetch latest release version."
