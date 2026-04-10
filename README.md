@@ -20,7 +20,7 @@ rwd answers **"What did I decide today, and why?"** — it extracts decisions, c
 
 ## Installation
 
-### One-line install (macOS Apple Silicon)
+### One-line install (macOS Apple Silicon / Linux x86_64)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | sh
@@ -37,6 +37,12 @@ irm https://raw.githubusercontent.com/gigagookbob/rwd/main/install.ps1 | iex
 ```bash
 cargo install --git https://github.com/gigagookbob/rwd.git
 ```
+
+### Prebuilt binary targets
+
+- `aarch64-apple-darwin` (macOS Apple Silicon)
+- `x86_64-unknown-linux-gnu` (Linux x86_64)
+- `x86_64-pc-windows-msvc` (Windows x86_64)
 
 > If macOS shows "unidentified developer" warning:
 > ```bash
@@ -80,6 +86,14 @@ rwd slack              # Generate Slack-ready message → copy to clipboard
 rwd config             # Change settings (interactive menu)
 rwd update             # Update to the latest version
 ```
+
+## Release policy (maintainers)
+
+- Release is triggered automatically on `main` push only when these files changed:
+  - `src/**`, `prompts/**`, `Cargo.toml`, `Cargo.lock`
+- Release tag is derived from `Cargo.toml` package version (`vX.Y.Z`).
+- If the tag already exists, release is skipped.
+- Docs-only changes (for example `README.md`, `docs/**`) do not trigger release.
 
 ## Uninstall
 
