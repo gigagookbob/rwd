@@ -23,7 +23,7 @@ rwd answers **"What did I decide today, and why?"** — it extracts decisions, c
 ### One-line install (macOS Apple Silicon / Linux x86_64)
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
 ```
 
 ### One-line install (Windows)

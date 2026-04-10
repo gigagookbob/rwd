@@ -1,8 +1,15 @@
 #!/usr/bin/env bash
+
+if [ -z "${BASH_VERSION:-}" ]; then
+    echo "오류: 이 설치 스크립트는 bash가 필요합니다." >&2
+    echo "다음처럼 실행하세요: curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash" >&2
+    exit 1
+fi
+
 set -euo pipefail
 
 # rwd 설치 스크립트
-# 사용법: curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | sh
+# 사용법: curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
 
 REPO="gigagookbob/rwd"
 INSTALL_DIR="/usr/local/bin"
