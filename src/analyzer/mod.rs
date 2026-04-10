@@ -1,6 +1,7 @@
 // Sends parsed log data to LLM APIs and extracts developer insights.
 
 pub mod anthropic;
+pub mod codex_exec;
 pub mod insight;
 pub mod openai;
 pub mod planner;
