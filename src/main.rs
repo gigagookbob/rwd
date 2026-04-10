@@ -281,10 +281,10 @@ fn resolve_lang(
         };
     }
     // 2. Config value
-    if let Some(cfg) = loaded_config.as_ref() {
-        if let Some(lang) = &cfg.lang {
-            return Ok(lang.clone());
-        }
+    if let Some(cfg) = loaded_config.as_ref()
+        && let Some(lang) = &cfg.lang
+    {
+        return Ok(lang.clone());
     }
     // 3. Migration prompt — ask user and save to config
     eprint!("{}", crate::messages::lang::NOT_CONFIGURED);

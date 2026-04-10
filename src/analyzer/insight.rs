@@ -112,10 +112,10 @@ pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerE
 /// Tries `{"sessions"` first (most specific), then falls back to any `{`.
 fn extract_json_object(text: &str) -> Result<AnalysisResult, serde_json::Error> {
     // Try the most specific marker first.
-    if let Some(start) = text.find("{\"sessions\"") {
-        if let Ok(result) = serde_json::from_str::<AnalysisResult>(&text[start..]) {
-            return Ok(result);
-        }
+    if let Some(start) = text.find("{\"sessions\"")
+        && let Ok(result) = serde_json::from_str::<AnalysisResult>(&text[start..])
+    {
+        return Ok(result);
     }
     // Fall back to first '{'.
     if let Some(start) = text.find('{') {
