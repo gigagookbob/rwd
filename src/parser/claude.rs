@@ -153,6 +153,18 @@ pub fn discover_log_dir() -> Result<PathBuf, super::ParseError> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
 
     let claude_projects = home.join(".claude").join("projects");
+    if claude_projects.exists() {
+        return Ok(claude_projects);
+    }
+
+    if cfg!(target_os = "linux") && is_wsl_environment() {
+        for win_home in wsl_windows_home_candidates() {
+            let candidate = win_home.join(".claude").join("projects");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
 
     if !claude_projects.exists() {
         return Err(format!(
@@ -163,6 +175,40 @@ pub fn discover_log_dir() -> Result<PathBuf, super::ParseError> {
     }
 
     Ok(claude_projects)
+}
+
+fn is_wsl_environment() -> bool {
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        return true;
+    }
+
+    std::fs::read_to_string("/proc/version")
+        .map(|s| s.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+}
+
+fn wsl_windows_home_candidates() -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = Vec::new();
+    let mut push_home = |path: PathBuf| {
+        if !homes.iter().any(|p| p == &path) {
+            homes.push(path);
+        }
+    };
+
+    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+        push_home(PathBuf::from(userprofile));
+    }
+
+    if let Ok(entries) = std::fs::read_dir("/mnt/c/Users") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                push_home(path);
+            }
+        }
+    }
+
+    homes
 }
 
 /// Returns all project directories under ~/.claude/projects/.
