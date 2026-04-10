@@ -55,15 +55,19 @@ cargo install --git https://github.com/gigagookbob/rwd.git
 rwd init
 ```
 
-Sets up your API key, output path, and language preference. Obsidian vault is auto-detected if available.
+Sets up your LLM provider, credentials, output path, and language preference.
+If you choose `codex`, `rwd` uses your existing `codex login` session (no API key required).
+Obsidian vault is auto-detected if available.
 Config is stored at `~/.config/rwd/config.toml`.
 
 ### Change settings
 
 ```bash
 rwd config output-path /path/to/vault    # Change output path
-rwd config provider openai               # Change LLM provider
+rwd config provider codex                # Change LLM provider
 rwd config api-key sk-...                # Change API key
+rwd config codex-model gpt-5.4           # Override Codex model (default: gpt-5.4)
+rwd config codex-reasoning xhigh         # Override Codex reasoning (default: xhigh)
 rwd config lang ko                       # Change output language (en/ko)
 ```
 

@@ -3,7 +3,7 @@
 ## Core Flow
 
 ```
-rwd today:       CLI entry → log file discovery → JSONL parsing & structuring → LLM API call → Markdown generation → Obsidian Vault save
+rwd today:       CLI entry → log file discovery → JSONL parsing & structuring → LLM provider call (API or Codex CLI) → Markdown generation → Obsidian Vault save
 rwd today -b:    CLI entry → spawn background worker → exit immediately → OS notification on completion
 rwd summary:     CLI entry → cache load → collect work_summaries → LLM API (SUMMARY_PROMPT) → Obsidian save + clipboard copy
 rwd slack:       CLI entry → cache load → collect work_summaries → LLM API (SLACK_PROMPT) → clipboard copy
@@ -64,6 +64,7 @@ rwd/
 │   ├── analyzer/        # Structured data → LLM insight extraction
 │   │   ├── mod.rs       # Orchestrator
 │   │   ├── anthropic.rs # Anthropic Claude API client
+│   │   ├── codex_exec.rs# Codex CLI (codex exec) provider backend
 │   │   ├── insight.rs   # Response parsing
 │   │   ├── openai.rs    # OpenAI API client
 │   │   ├── planner.rs   # Execution plan generation
