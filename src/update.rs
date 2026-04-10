@@ -282,19 +282,70 @@ fn replace_binary_unix(
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
 
-    match std::fs::copy(new_binary, target) {
+    match stage_and_rename_unix(new_binary, target) {
         Ok(_) => Ok(()),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
             eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
-            let status = std::process::Command::new("sudo")
-                .args(["cp", &new_binary.to_string_lossy(), &target.to_string_lossy()])
+            // Privileged fallback: copy to sibling temp path, then atomic rename.
+            let staged = target.with_extension("new");
+
+            let copy_status = std::process::Command::new("sudo")
+                .args([
+                    "cp",
+                    &new_binary.to_string_lossy(),
+                    &staged.to_string_lossy(),
+                ])
                 .status()?;
-            if status.success() {
+            if !copy_status.success() {
+                return Err(crate::messages::error::BINARY_REPLACE_FAILED.into());
+            }
+
+            let chmod_status = std::process::Command::new("sudo")
+                .args(["chmod", "755", &staged.to_string_lossy()])
+                .status()?;
+            if !chmod_status.success() {
+                let _ = std::process::Command::new("sudo")
+                    .args(["rm", "-f", &staged.to_string_lossy()])
+                    .status();
+                return Err(crate::messages::error::BINARY_REPLACE_FAILED.into());
+            }
+
+            let move_status = std::process::Command::new("sudo")
+                .args(["mv", "-f", &staged.to_string_lossy(), &target.to_string_lossy()])
+                .status()?;
+            if move_status.success() {
                 return Ok(());
             }
             Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
         }
         Err(e) => Err(e.into()),
+    }
+}
+
+#[cfg(unix)]
+fn stage_and_rename_unix(
+    new_binary: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<(), std::io::Error> {
+    use std::io::ErrorKind;
+    use std::os::unix::fs::PermissionsExt;
+
+    let parent = target.parent().ok_or_else(|| {
+        std::io::Error::new(ErrorKind::NotFound, "target has no parent directory")
+    })?;
+    let staged = parent.join(format!(".rwd-update-{}.tmp", std::process::id()));
+
+    // Best-effort cleanup of a stale temp file from a previous failed attempt.
+    let _ = std::fs::remove_file(&staged);
+    std::fs::copy(new_binary, &staged)?;
+    std::fs::set_permissions(&staged, std::fs::Permissions::from_mode(0o755))?;
+
+    match std::fs::rename(&staged, target) {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = std::fs::remove_file(&staged);
+            Err(e)
+        }
     }
 }
 
@@ -332,5 +383,33 @@ mod tests {
     fn invalid_version_falls_back_to_string_compare() {
         assert!(is_newer("not-a-version", "0.11.4"));
         assert!(!is_newer("same", "same"));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn stage_and_rename_unix_replaces_target_atomically() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let temp_dir = std::env::temp_dir().join(format!(
+            "rwd_update_stage_test_{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create temp dir");
+
+        let source = temp_dir.join("source.bin");
+        let target = temp_dir.join("target.bin");
+
+        std::fs::write(&source, b"new-content").expect("write source");
+        std::fs::set_permissions(&source, std::fs::Permissions::from_mode(0o755))
+            .expect("chmod source");
+        std::fs::write(&target, b"old-content").expect("write target");
+
+        super::stage_and_rename_unix(&source, &target).expect("replace target");
+
+        let replaced = std::fs::read(&target).expect("read target");
+        assert_eq!(replaced, b"new-content");
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 }
