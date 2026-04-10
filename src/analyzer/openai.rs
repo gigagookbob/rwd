@@ -12,6 +12,14 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     max_tokens: u32,
+    response_format: ResponseFormat,
+}
+
+/// Forces JSON output mode.
+#[derive(Serialize)]
+struct ResponseFormat {
+    #[serde(rename = "type")]
+    format_type: String,
 }
 
 /// Chat message (role + content).
@@ -72,6 +80,9 @@ pub async fn call_openai_api(
             },
         ],
         max_tokens,
+        response_format: ResponseFormat {
+            format_type: "json_object".to_string(),
+        },
     };
 
     let response = client
@@ -124,6 +135,9 @@ pub async fn call_openai_api_with_max_tokens(
             },
         ],
         max_tokens,
+        response_format: ResponseFormat {
+            format_type: "json_object".to_string(),
+        },
     };
     let response = client
         .post(API_URL)
@@ -152,11 +166,19 @@ pub async fn call_openai_api_with_max_tokens(
     Ok((text.message.content.clone(), usage))
 }
 
+/// Minimal request body for probing (no response_format needed).
+#[derive(Serialize)]
+struct ProbeRequest {
+    model: String,
+    messages: Vec<ChatMessage>,
+    max_tokens: u32,
+}
+
 /// Sends a minimal request to probe rate limits from response headers.
 pub async fn probe_openai_rate_limits(api_key: &str) -> Option<RateLimits> {
     let client = reqwest::Client::new();
 
-    let request_body = ChatRequest {
+    let request_body = ProbeRequest {
         model: MODEL.to_string(),
         messages: vec![ChatMessage {
             role: "user".to_string(),

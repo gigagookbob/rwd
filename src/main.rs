@@ -34,9 +34,16 @@ async fn main() {
     }
 
     match args.command {
-        Commands::Today { verbose, lang, background, worker } => {
+        Commands::Today { verbose, lang, date, background, worker } => {
+            let target_date = match parse_date_flag(&date) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            };
             if worker {
-                if let Err(e) = run_worker(lang).await {
+                if let Err(e) = run_worker(lang, target_date).await {
                     let log_path = worker_log_path();
                     if let Some(parent) = log_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -49,12 +56,12 @@ async fn main() {
                     std::process::exit(1);
                 }
             } else if background {
-                if let Err(e) = spawn_worker(&lang) {
+                if let Err(e) = spawn_worker(&lang, &date) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
             } else {
-                if let Err(e) = run_today(verbose, lang).await {
+                if let Err(e) = run_today(verbose, lang, target_date).await {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -83,18 +90,41 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Summary { lang } => {
-            if let Err(e) = run_summary(lang).await {
+        Commands::Summary { lang, date } => {
+            let target_date = match parse_date_flag(&date) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = run_summary(lang, target_date).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
-        Commands::Slack { lang } => {
-            if let Err(e) = run_slack(lang).await {
+        Commands::Slack { lang, date } => {
+            let target_date = match parse_date_flag(&date) {
+                Ok(d) => d,
+                Err(e) => {
+                    eprintln!("Error: {e}");
+                    std::process::exit(1);
+                }
+            };
+            if let Err(e) = run_slack(lang, target_date).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
+    }
+}
+
+/// Parses `--date` flag into `NaiveDate`. Returns today if `None`.
+fn parse_date_flag(date: &Option<String>) -> Result<chrono::NaiveDate, String> {
+    match date {
+        None => Ok(chrono::Local::now().date_naive()),
+        Some(s) => chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d")
+            .map_err(|_| format!("Invalid date format: '{s}'. Expected YYYY-MM-DD.")),
     }
 }
 
@@ -153,7 +183,7 @@ fn is_worker_running() -> bool {
 }
 
 /// Spawns a background worker process.
-fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_worker(lang_flag: &Option<String>, date_flag: &Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     if is_worker_running() {
         println!("{}", crate::messages::background::ALREADY_RUNNING);
         return Ok(());
@@ -172,6 +202,10 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
         args.push("--lang".to_string());
         args.push(lang.to_string());
     }
+    if let Some(date) = date_flag {
+        args.push("--date".to_string());
+        args.push(date.clone());
+    }
 
     let child = std::process::Command::new(exe)
         .args(&args)
@@ -183,9 +217,9 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
     println!("  {}", crate::messages::background::NOTIFIED_WHEN_DONE);
 
     // Show where results will be saved.
-    let today = chrono::Local::now().date_naive();
+    let display_date = parse_date_flag(date_flag).unwrap_or_else(|_| chrono::Local::now().date_naive());
     if let Ok(vault_path) = output::load_vault_path() {
-        let file_path = vault_path.join(format!("{today}.md"));
+        let file_path = vault_path.join(format!("{display_date}.md"));
         println!("  {}", crate::messages::background::results_path(&file_path.display()));
     }
 
@@ -193,14 +227,14 @@ fn spawn_worker(lang_flag: &Option<String>) -> Result<(), Box<dyn std::error::Er
 }
 
 /// Runs as a background worker: lock, analyze, notify, unlock.
-async fn run_worker(lang: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_worker(lang: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
     let lock_path = worker_lock_path();
     if let Some(parent) = lock_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let result = run_today(false, lang).await;
+    let result = run_today(false, lang, target_date).await;
 
     // Always clean up lock file
     let _ = std::fs::remove_file(&lock_path);
@@ -273,8 +307,8 @@ fn resolve_lang(
     Ok(lang)
 }
 
-/// Parses today's session logs, runs LLM analysis, and prints insights.
-async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parser::ParseError> {
+/// Parses session logs for the given date, runs LLM analysis, and prints insights.
+async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), parser::ParseError> {
     let mut loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("{}", crate::messages::error::NO_CONFIG);
@@ -284,8 +318,7 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
     let lang = resolve_lang(&lang_flag, &mut loaded_config)
         .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
-    // Use local timezone (e.g. KST) to determine "today".
-    let today = chrono::Local::now().date_naive();
+    let today = target_date;
 
     // === Collect Claude Code logs ===
     let (claude_entries, claude_discovery) = collect_claude_entries_with_stats(today);
@@ -311,8 +344,6 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
     let claude_count = claude_entries.len();
     let codex_count = codex_sessions.len();
 
-    let now = chrono::Local::now();
-
     // === Logo banner ===
     print_logo_banner();
 
@@ -324,7 +355,7 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
     };
 
     print_info_box(
-        now,
+        today,
         summaries.as_deref(),
         &claude_entries,
         &codex_sessions,
@@ -421,14 +452,14 @@ async fn run_today(verbose: bool, lang_flag: Option<String>) -> Result<(), parse
 /// 1. Loads today's cache (runs `run_today()` first if missing).
 /// 2. Collects work_summary from all sessions and sends to LLM.
 /// 3. Prints summary to terminal, appends to daily Markdown, copies to clipboard.
-async fn run_summary(_lang_flag: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let today = chrono::Local::now().date_naive();
+async fn run_summary(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
+    let today = target_date;
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None).await?;
+            run_today(false, None, today).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -477,14 +508,14 @@ async fn run_summary(_lang_flag: Option<String>) -> Result<(), Box<dyn std::erro
 ///
 /// Similar to `run_summary()` but uses SLACK_PROMPT for Slack-friendly formatting.
 /// Only outputs to terminal and copies to clipboard (no Obsidian save).
-async fn run_slack(_lang_flag: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
-    let today = chrono::Local::now().date_naive();
+async fn run_slack(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
+    let today = target_date;
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None).await?;
+            run_today(false, None, today).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -703,6 +734,15 @@ fn claude_earliest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::
         .map(|ts| ts.with_timezone(&chrono::Local))
 }
 
+/// Returns the latest local timestamp from Claude entries.
+fn claude_latest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::DateTime<chrono::Local>> {
+    entries
+        .iter()
+        .filter_map(parser::claude::entry_timestamp)
+        .max()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
 /// Returns the earliest local timestamp from Codex sessions.
 fn codex_earliest_time(
     sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
@@ -721,6 +761,24 @@ fn codex_earliest_time(
         .map(|ts| ts.with_timezone(&chrono::Local))
 }
 
+/// Returns the latest local timestamp from Codex sessions.
+fn codex_latest_time(
+    sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+) -> Option<chrono::DateTime<chrono::Local>> {
+    sessions
+        .iter()
+        .flat_map(|(_, entries)| entries.iter())
+        .filter_map(|e| match e {
+            parser::codex::CodexEntry::SessionMeta { timestamp, .. }
+            | parser::codex::CodexEntry::UserMessage { timestamp, .. }
+            | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
+            | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
+            parser::codex::CodexEntry::Other => None,
+        })
+        .max()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
 /// Computes total token counts from Claude session summaries: (total_in, total_out).
 fn claude_total_tokens(summaries: &[parser::claude::SessionSummary]) -> (u64, u64) {
     summaries.iter().fold((0, 0), |(acc_in, acc_out), s| {
@@ -734,11 +792,13 @@ fn claude_total_tokens(summaries: &[parser::claude::SessionSummary]) -> (u64, u6
 /// Formats a time range as "HH:MM ~ HH:MM".
 fn format_time_range(
     earliest: Option<chrono::DateTime<chrono::Local>>,
-    now: chrono::DateTime<chrono::Local>,
+    latest: Option<chrono::DateTime<chrono::Local>>,
 ) -> String {
-    match earliest {
-        Some(start) => format!("{} ~ {}", start.format("%H:%M"), now.format("%H:%M")),
-        None => format!("? ~ {}", now.format("%H:%M")),
+    match (earliest, latest) {
+        (Some(start), Some(end)) => format!("{} ~ {}", start.format("%H:%M"), end.format("%H:%M")),
+        (Some(start), None) => format!("{} ~ ?", start.format("%H:%M")),
+        (None, Some(end)) => format!("? ~ {}", end.format("%H:%M")),
+        (None, None) => "? ~ ?".to_string(),
     }
 }
 
@@ -801,13 +861,13 @@ fn print_logo_banner() {
 /// Prints date and session summary as a Unicode box table.
 /// Box width is dynamically sized to the longest content line.
 fn print_info_box(
-    now: chrono::DateTime<chrono::Local>,
+    date: chrono::NaiveDate,
     claude_summaries: Option<&[parser::claude::SessionSummary]>,
     claude_entries: &[parser::claude::LogEntry],
     codex_sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
 ) {
     // Build rows as (color_kind, text) pairs. "sep" means separator line.
-    let date_str = format!("{}", now.format("%Y-%m-%d %H:%M"));
+    let date_str = format!("{date}");
 
     let mut rows: Vec<(&str, String)> = Vec::new();
     rows.push(("plain", date_str));
@@ -818,7 +878,8 @@ fn print_info_box(
         rows.push(("blue", "Claude Code".to_string()));
 
         let earliest = claude_earliest_time(claude_entries);
-        let time_range = format_time_range(earliest, now);
+        let latest = claude_latest_time(claude_entries);
+        let time_range = format_time_range(earliest, latest);
         rows.push(("plain", time_range));
 
         let (total_in, total_out) = claude_total_tokens(summaries);
@@ -834,7 +895,8 @@ fn print_info_box(
     rows.push(("yellow", "Codex".to_string()));
     if !codex_sessions.is_empty() {
         let earliest = codex_earliest_time(codex_sessions);
-        let time_range = format_time_range(earliest, now);
+        let latest = codex_latest_time(codex_sessions);
+        let time_range = format_time_range(earliest, latest);
         rows.push(("plain", time_range));
         rows.push(("plain", crate::messages::display::session_count(codex_sessions.len())));
     } else {
