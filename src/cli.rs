@@ -7,8 +7,11 @@ Examples:
   rwd today                         Analyze and print results
   rwd today -v                      Show detailed execution plan
   rwd today -b                      Run in background, notify when done
+  rwd today --date 2026-04-09       Analyze a specific date
   rwd summary                       Summarize today's work and save to Obsidian
+  rwd summary --date 2026-04-09     Summarize a specific date
   rwd slack                         Generate Slack message and copy to clipboard
+  rwd slack --date 2026-04-09       Generate Slack message for a specific date
   rwd init                          Set up API key and output path
   rwd config                        Interactive settings menu
   rwd config output-path ~/vault    Set Obsidian vault path
@@ -27,9 +30,10 @@ pub enum Commands {
     /// Analyze today's AI coding sessions and save insights to Obsidian
     #[command(after_help = "\
 Examples:
-  rwd today       Analyze and print results
-  rwd today -v    Show detailed execution plan
-  rwd today -b    Run in background, notify when done")]
+  rwd today                    Analyze and print results
+  rwd today -v                 Show detailed execution plan
+  rwd today -b                 Run in background, notify when done
+  rwd today --date 2026-04-09  Analyze a specific date")]
     Today {
         /// Show detailed execution plan per session
         #[arg(long, short)]
@@ -37,6 +41,9 @@ Examples:
         /// Override output language (en/ko)
         #[arg(long)]
         lang: Option<String>,
+        /// Target date (YYYY-MM-DD), defaults to today
+        #[arg(long)]
+        date: Option<String>,
         /// Run in background with OS notification on completion
         #[arg(long, short)]
         background: bool,
@@ -49,12 +56,18 @@ Examples:
         /// Override output language (en/ko)
         #[arg(long)]
         lang: Option<String>,
+        /// Target date (YYYY-MM-DD), defaults to today
+        #[arg(long)]
+        date: Option<String>,
     },
     /// Generate a Slack-ready message and copy to clipboard
     Slack {
         /// Override output language (en/ko)
         #[arg(long)]
         lang: Option<String>,
+        /// Target date (YYYY-MM-DD), defaults to today
+        #[arg(long)]
+        date: Option<String>,
     },
     /// Run initial setup (API key, output path)
     Init,
