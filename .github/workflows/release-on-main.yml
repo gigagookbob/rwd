@@ -1,0 +1,58 @@
+name: Release On Main
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - src/**
+      - prompts/**
+      - Cargo.toml
+      - Cargo.lock
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release-trigger-main
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.tag_check.outputs.should_release }}
+      tag_name: ${{ steps.version.outputs.tag_name }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve tag from Cargo.toml version
+        id: version
+        run: |
+          VERSION=$(awk -F '"' '/^version = / { print $2; exit }' Cargo.toml)
+          if [ -z "$VERSION" ]; then
+            echo "Failed to read version from Cargo.toml" >&2
+            exit 1
+          fi
+          echo "tag_name=v${VERSION}" >> "$GITHUB_OUTPUT"
+
+      - name: Check whether tag already exists
+        id: tag_check
+        run: |
+          TAG="${{ steps.version.outputs.tag_name }}"
+          if git ls-remote --exit-code --tags origin "refs/tags/${TAG}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${TAG} already exists. Skipping release."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${TAG} does not exist. Proceeding release."
+          fi
+
+  release:
+    needs: preflight
+    if: needs.preflight.outputs.should_release == 'true'
+    uses: ./.github/workflows/release.yml
+    with:
+      tag_name: ${{ needs.preflight.outputs.tag_name }}
+      target_sha: ${{ github.sha }}
