@@ -1,15 +1,43 @@
-name: Release
+name: Release Publish
 
 on:
-  push:
-    tags:
-      - 'v*'
+  workflow_call:
+    inputs:
+      tag_name:
+        required: true
+        type: string
+      target_sha:
+        required: true
+        type: string
 
 permissions:
   contents: write
 
+concurrency:
+  group: release-${{ inputs.tag_name }}
+  cancel-in-progress: false
+
 jobs:
+  guard:
+    runs-on: ubuntu-latest
+    outputs:
+      should_release: ${{ steps.check.outputs.should_release }}
+
+    steps:
+      - name: Check if tag already exists
+        id: check
+        run: |
+          if git ls-remote --exit-code --tags "https://github.com/${{ github.repository }}.git" "refs/tags/${{ inputs.tag_name }}" >/dev/null 2>&1; then
+            echo "should_release=false" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ inputs.tag_name }} already exists. Skipping release."
+          else
+            echo "should_release=true" >> "$GITHUB_OUTPUT"
+            echo "Tag ${{ inputs.tag_name }} does not exist. Proceeding release."
+          fi
+
   build:
+    needs: guard
+    if: needs.guard.outputs.should_release == 'true'
     strategy:
       matrix:
         include:
@@ -53,12 +81,11 @@ jobs:
           path: rwd-${{ matrix.target }}.*
 
   release:
-    needs: build
+    needs: [guard, build]
+    if: needs.guard.outputs.should_release == 'true'
     runs-on: ubuntu-latest
 
     steps:
-      - uses: actions/checkout@v4
-
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
@@ -67,6 +94,8 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ inputs.tag_name }}
+          target_commitish: ${{ inputs.target_sha }}
           generate_release_notes: true
           files: |
             rwd-*.tar.gz
