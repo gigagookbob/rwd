@@ -2,7 +2,11 @@ use clap::{Parser, Subcommand};
 
 /// CLI tool for analyzing AI coding session logs and extracting daily dev insights
 #[derive(Parser)]
-#[command(name = "rwd", version, about, after_help = "\
+#[command(
+    name = "rwd",
+    version,
+    about,
+    after_help = "\
 Examples:
   rwd today                         Analyze and print results
   rwd today -v                      Show detailed execution plan
@@ -12,12 +16,15 @@ Examples:
   rwd summary --date 2026-04-09     Summarize a specific date
   rwd slack                         Generate Slack message and copy to clipboard
   rwd slack --date 2026-04-09       Generate Slack message for a specific date
-  rwd init                          Set up API key and output path
+  rwd init                          Set up provider credentials and output path
   rwd config                        Interactive settings menu
   rwd config output-path ~/vault    Set Obsidian vault path
-  rwd config provider openai        Switch LLM provider
+  rwd config provider codex         Switch LLM provider
+  rwd config codex-model gpt-5.4    Set Codex model
+  rwd config codex-reasoning xhigh  Set Codex reasoning effort
   rwd config api-key                Change API key
-  rwd update                        Update to the latest version")]
+  rwd update                        Update to the latest version"
+)]
 pub struct Cli {
     /// Subcommand to execute
     #[command(subcommand)]
@@ -69,16 +76,18 @@ Examples:
         #[arg(long)]
         date: Option<String>,
     },
-    /// Run initial setup (API key, output path)
+    /// Run initial setup (provider credentials, output path)
     Init,
     /// Change a config value (interactive menu if no args)
     #[command(after_help = "\
 Examples:
   rwd config                        Interactive settings menu
   rwd config output-path ~/vault    Set Obsidian vault path
-  rwd config provider openai        Switch LLM provider")]
+  rwd config provider codex         Switch LLM provider
+  rwd config codex-model gpt-5.4    Set Codex model
+  rwd config codex-reasoning xhigh  Set Codex reasoning effort")]
     Config {
-        /// Config key (output-path, provider, api-key)
+        /// Config key (output-path, provider, api-key, codex-model, codex-reasoning)
         key: Option<String>,
         /// Value to set
         value: Option<String>,

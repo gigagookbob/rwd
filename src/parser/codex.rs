@@ -118,7 +118,55 @@ fn extract_codex_output_text(payload: &serde_json::Value) -> String {
 /// Returns the Codex sessions directory path: ~/.codex/sessions/
 pub fn discover_codex_sessions_dir() -> Result<PathBuf, super::ParseError> {
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    Ok(home.join(".codex").join("sessions"))
+    let default = home.join(".codex").join("sessions");
+    if default.exists() {
+        return Ok(default);
+    }
+
+    if cfg!(target_os = "linux") && is_wsl_environment() {
+        for win_home in wsl_windows_home_candidates() {
+            let candidate = win_home.join(".codex").join("sessions");
+            if candidate.exists() {
+                return Ok(candidate);
+            }
+        }
+    }
+
+    Ok(default)
+}
+
+fn is_wsl_environment() -> bool {
+    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
+        return true;
+    }
+
+    std::fs::read_to_string("/proc/version")
+        .map(|s| s.to_ascii_lowercase().contains("microsoft"))
+        .unwrap_or(false)
+}
+
+fn wsl_windows_home_candidates() -> Vec<PathBuf> {
+    let mut homes: Vec<PathBuf> = Vec::new();
+    let mut push_home = |path: PathBuf| {
+        if !homes.iter().any(|p| p == &path) {
+            homes.push(path);
+        }
+    };
+
+    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
+        push_home(PathBuf::from(userprofile));
+    }
+
+    if let Ok(entries) = std::fs::read_dir("/mnt/c/Users") {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                push_home(path);
+            }
+        }
+    }
+
+    homes
 }
 
 /// Lists session files for a specific date.
