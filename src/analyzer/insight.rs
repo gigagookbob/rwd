@@ -88,18 +88,41 @@ pub struct Correction {
 
 /// Parses Claude API raw text response into an AnalysisResult.
 ///
-/// The LLM is instructed to return JSON only, but sometimes wraps it in
-/// markdown code fences (```json...```), so we strip those defensively.
+/// The LLM is instructed to return JSON only, but sometimes:
+/// - wraps it in markdown code fences (```json...```)
+/// - prepends free-form text before the JSON object
+///
+/// We strip those defensively.
 pub fn parse_response(raw_text: &str) -> Result<AnalysisResult, super::AnalyzerError> {
     let cleaned = strip_code_fences(raw_text);
 
-    serde_json::from_str::<AnalysisResult>(&cleaned).map_err(|e| {
-        let preview_end = raw_text
-            .char_indices()
-            .nth(200)
-            .map_or(raw_text.len(), |(idx, _)| idx);
-        crate::messages::error::json_parse_failed(&e, &raw_text[..preview_end]).into()
-    })
+    serde_json::from_str::<AnalysisResult>(&cleaned)
+        .or_else(|_| extract_json_object(&cleaned))
+        .map_err(|e| {
+            let preview_end = raw_text
+                .char_indices()
+                .nth(200)
+                .map_or(raw_text.len(), |(idx, _)| idx);
+            crate::messages::error::json_parse_failed(&e, &raw_text[..preview_end]).into()
+        })
+}
+
+/// Extracts a JSON object from text that may contain non-JSON content.
+///
+/// Tries `{"sessions"` first (most specific), then falls back to any `{`.
+fn extract_json_object(text: &str) -> Result<AnalysisResult, serde_json::Error> {
+    // Try the most specific marker first.
+    if let Some(start) = text.find("{\"sessions\"") {
+        if let Ok(result) = serde_json::from_str::<AnalysisResult>(&text[start..]) {
+            return Ok(result);
+        }
+    }
+    // Fall back to first '{'.
+    if let Some(start) = text.find('{') {
+        return serde_json::from_str::<AnalysisResult>(&text[start..]);
+    }
+    // Nothing found — re-parse full text to produce the original error.
+    serde_json::from_str::<AnalysisResult>(text)
 }
 
 /// Merges multiple AnalysisResults into one by concatenating their session vecs.
@@ -261,5 +284,15 @@ mod tests {
         let json = r#"{"sessions":[{"session_id":"s1","work_summary":"요약","decisions":[{"what":"선택","why":{"reason":"이유","context":"맥락"}}],"curiosities":[],"corrections":[]}]}"#;
         let result = parse_response(json).unwrap();
         assert!(result.sessions[0].decisions[0].why.contains("이유"));
+    }
+
+    #[test]
+    fn test_parse_response_with_preamble_text() {
+        let raw = r#"Looking at this conversation, here is the analysis:
+
+{"sessions":[{"session_id":"s1","work_summary":"작업 요약","decisions":[],"curiosities":[],"corrections":[]}]}"#;
+        let result = parse_response(raw).unwrap();
+        assert_eq!(result.sessions.len(), 1);
+        assert_eq!(result.sessions[0].session_id, "s1");
     }
 }
