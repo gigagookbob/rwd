@@ -23,6 +23,12 @@ pub struct TodayCache {
     pub date: String,
     pub claude_entry_count: usize,
     pub codex_session_count: usize,
+    /// Total parsed Codex entries for the target date.
+    ///
+    /// Added after `codex_session_count` to avoid false cache hits when
+    /// conversations continue inside existing sessions.
+    #[serde(default)]
+    pub codex_entry_count: usize,
     /// Per-source analysis results.
     pub sources: Vec<(String, AnalysisResult)>,
 }
@@ -79,7 +85,10 @@ pub fn save_update_check(cache: &UpdateCheckCache) -> Result<(), CacheError> {
 }
 
 /// Saves update check cache to a specific path (for testability).
-fn save_update_check_to(cache: &UpdateCheckCache, path: &std::path::Path) -> Result<(), CacheError> {
+fn save_update_check_to(
+    cache: &UpdateCheckCache,
+    path: &std::path::Path,
+) -> Result<(), CacheError> {
     let json = serde_json::to_string_pretty(cache)?;
     std::fs::write(path, json)?;
     Ok(())
@@ -126,5 +135,17 @@ mod tests {
         let _ = std::fs::remove_file(&path);
         let loaded = load_update_check_from(&path);
         assert!(loaded.is_none());
+    }
+
+    #[test]
+    fn test_today_cache_deserialize_legacy_json_defaults_codex_entry_count() {
+        let json = r#"{
+  "date":"2026-04-11",
+  "claude_entry_count":10,
+  "codex_session_count":2,
+  "sources":[]
+}"#;
+        let loaded: TodayCache = serde_json::from_str(json).expect("deserialize legacy cache");
+        assert_eq!(loaded.codex_entry_count, 0);
     }
 }

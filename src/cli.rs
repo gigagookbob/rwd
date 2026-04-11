@@ -9,12 +9,15 @@ use clap::{Parser, Subcommand};
     after_help = "\
 Examples:
   rwd today                         Analyze and print results
+  rwd today --no-cache              Force fresh analysis (ignore cache)
   rwd today -v                      Show detailed execution plan
   rwd today -b                      Run in background, notify when done
   rwd today --date 2026-04-09       Analyze a specific date
   rwd summary                       Summarize today's work and save to Obsidian
+  rwd summary --no-cache            Refresh analysis before summary
   rwd summary --date 2026-04-09     Summarize a specific date
   rwd slack                         Generate Slack message and copy to clipboard
+  rwd slack --no-cache              Refresh analysis before Slack message
   rwd slack --date 2026-04-09       Generate Slack message for a specific date
   rwd init                          Set up provider credentials and output path
   rwd config                        Interactive settings menu
@@ -38,6 +41,7 @@ pub enum Commands {
     #[command(after_help = "\
 Examples:
   rwd today                    Analyze and print results
+  rwd today --no-cache         Force fresh analysis (ignore cache)
   rwd today -v                 Show detailed execution plan
   rwd today -b                 Run in background, notify when done
   rwd today --date 2026-04-09  Analyze a specific date")]
@@ -54,6 +58,9 @@ Examples:
         /// Run in background with OS notification on completion
         #[arg(long, short)]
         background: bool,
+        /// Ignore cache and force fresh analysis
+        #[arg(long)]
+        no_cache: bool,
         /// Internal: run as background worker (hidden from help)
         #[arg(long, hide = true)]
         worker: bool,
@@ -66,6 +73,9 @@ Examples:
         /// Target date (YYYY-MM-DD), defaults to today
         #[arg(long)]
         date: Option<String>,
+        /// Refresh today's analysis before generating summary
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Generate a Slack-ready message and copy to clipboard
     Slack {
@@ -75,6 +85,9 @@ Examples:
         /// Target date (YYYY-MM-DD), defaults to today
         #[arg(long)]
         date: Option<String>,
+        /// Refresh today's analysis before generating Slack message
+        #[arg(long)]
+        no_cache: bool,
     },
     /// Run initial setup (provider credentials, output path)
     Init,

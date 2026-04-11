@@ -35,10 +35,7 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
                     if !sessions.contains_key(session_id) {
                         session_order.push(session_id);
                     }
-                    sessions
-                        .entry(session_id)
-                        .or_default()
-                        .push(("USER", text));
+                    sessions.entry(session_id).or_default().push(("USER", text));
                 }
             }
             LogEntry::Assistant(e) => {

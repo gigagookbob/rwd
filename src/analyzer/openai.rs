@@ -1,7 +1,7 @@
 // OpenAI Chat Completions API client.
 
-use serde::{Deserialize, Serialize};
 use super::planner::RateLimits;
+use serde::{Deserialize, Serialize};
 
 const API_URL: &str = "https://api.openai.com/v1/chat/completions";
 const MODEL: &str = "gpt-4o";
@@ -101,10 +101,13 @@ pub async fn call_openai_api(
 
     let chat_response: ChatResponse = response.json().await?;
 
-    let usage = chat_response.usage.map(|u| super::ApiUsage {
-        input_tokens: u.prompt_tokens,
-        output_tokens: u.completion_tokens,
-    }).unwrap_or_default();
+    let usage = chat_response
+        .usage
+        .map(|u| super::ApiUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+        })
+        .unwrap_or_default();
 
     let text = chat_response
         .choices
@@ -154,10 +157,13 @@ pub async fn call_openai_api_with_max_tokens(
     }
     let chat_response: ChatResponse = response.json().await?;
 
-    let usage = chat_response.usage.map(|u| super::ApiUsage {
-        input_tokens: u.prompt_tokens,
-        output_tokens: u.completion_tokens,
-    }).unwrap_or_default();
+    let usage = chat_response
+        .usage
+        .map(|u| super::ApiUsage {
+            input_tokens: u.prompt_tokens,
+            output_tokens: u.completion_tokens,
+        })
+        .unwrap_or_default();
 
     let text = chat_response
         .choices
@@ -260,6 +266,6 @@ mod tests {
     fn test_empty_choices() {
         let json = r#"{"choices": []}"#;
         let response: ChatResponse = serde_json::from_str(json).unwrap();
-        assert!(response.choices.first().is_none());
+        assert!(response.choices.is_empty());
     }
 }

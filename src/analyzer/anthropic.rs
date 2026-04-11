@@ -1,7 +1,7 @@
 // Anthropic Claude Messages API client.
 
-use serde::{Deserialize, Serialize};
 use super::planner::RateLimits;
+use serde::{Deserialize, Serialize};
 
 const API_URL: &str = "https://api.anthropic.com/v1/messages";
 const API_VERSION: &str = "2023-06-01";
@@ -85,10 +85,13 @@ pub async fn call_anthropic_api(
 
     let api_response: ApiResponse = response.json().await?;
 
-    let usage = api_response.usage.map(|u| super::ApiUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-    }).unwrap_or_default();
+    let usage = api_response
+        .usage
+        .map(|u| super::ApiUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        })
+        .unwrap_or_default();
 
     let text = api_response
         .content
@@ -133,10 +136,13 @@ pub async fn call_anthropic_api_with_max_tokens(
     }
     let api_response: ApiResponse = response.json().await?;
 
-    let usage = api_response.usage.map(|u| super::ApiUsage {
-        input_tokens: u.input_tokens,
-        output_tokens: u.output_tokens,
-    }).unwrap_or_default();
+    let usage = api_response
+        .usage
+        .map(|u| super::ApiUsage {
+            input_tokens: u.input_tokens,
+            output_tokens: u.output_tokens,
+        })
+        .unwrap_or_default();
 
     let text = api_response
         .content
