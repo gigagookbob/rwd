@@ -15,7 +15,7 @@ pub mod init {
     pub const ENTER_API_KEY_ANTHROPIC: &str = "Enter Anthropic API key: ";
     pub const ENTER_API_KEY_OPENAI: &str = "Enter OpenAI API key: ";
     pub const CODEX_LOGIN_AUTH: &str =
-        "Codex provider uses `codex login` authentication (no API key needed).";
+        "Codex provider uses `codex login` session authentication (API key is not used).";
     pub const API_KEY_EMPTY: &str = "API key is empty.";
 
     pub fn api_key_input_failed(e: &dyn std::fmt::Display) -> String {
@@ -57,7 +57,7 @@ pub mod config {
     pub const NO_CHANGE: &str = "  No change";
     pub const NEW_API_KEY: &str = "  New API key: ";
     pub const CONFIRM_API_KEY: &str = "Change API key?";
-    pub const USAGE: &str = "Usage: `rwd config` (interactive) or `rwd config <key> <value>` (keys: output-path, provider, api-key, codex-model, codex-reasoning)";
+    pub const USAGE: &str = "Usage: `rwd config` (interactive) or `rwd config <key> <value>` (keys: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning)";
 
     pub fn config_saved(path: &dyn std::fmt::Display) -> String {
         format!("Config saved. {path}")
@@ -71,12 +71,16 @@ pub mod config {
         format!("Output path changed: {value}")
     }
 
-    pub fn provider_changed(value: &str) -> String {
-        format!("LLM provider changed: {value}")
+    pub fn provider_changed(value: &str, auth_method: &str) -> String {
+        format!("LLM provider changed: {value} (auth: {auth_method})")
     }
 
     pub fn api_key_changed(masked: &str) -> String {
         format!("API key changed: {masked}")
+    }
+
+    pub fn provider_api_key_changed(provider: &str, masked: &str) -> String {
+        format!("{provider} API key changed: {masked}")
     }
 
     pub fn unsupported_provider(name: &str) -> String {
@@ -85,7 +89,7 @@ pub mod config {
 
     pub fn unknown_key(key: &str) -> String {
         format!(
-            "Unknown config key: '{key}'. Available: output-path, provider, api-key, codex-model, codex-reasoning"
+            "Unknown config key: '{key}'. Available: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning"
         )
     }
 
@@ -97,10 +101,55 @@ pub mod config {
         format!("Codex reasoning effort changed: {value}")
     }
 
+    pub fn provider_now_uses(provider: &str, auth_method: &str) -> String {
+        format!("  Provider `{provider}` now uses: {auth_method}")
+    }
+
+    pub fn switched_to_codex_keeps_api_key(api_key_state: &str) -> String {
+        format!(
+            "  Switched to Codex login auth. Stored API key is kept ({api_key_state}) and unused."
+        )
+    }
+
+    pub fn provider_requires_api_key(provider: &str) -> String {
+        format!(
+            "  `{provider}` uses API key auth. Provider key is not set — set one with `rwd config api-key <key>`."
+        )
+    }
+
+    pub fn api_key_unused_for_provider(provider: &str) -> String {
+        format!(
+            "Current provider `{provider}` does not use API key auth. Use `rwd config provider openai|anthropic` first, or set `openai-api-key` / `anthropic-api-key` directly."
+        )
+    }
+
     pub fn unsupported_reasoning_effort(value: &str) -> String {
         format!(
             "Unsupported codex reasoning effort: '{value}'. Available: low, medium, high, xhigh, default"
         )
+    }
+}
+
+/// Messages for `rwd auth status`.
+pub mod auth {
+    pub fn provider(value: &str) -> String {
+        format!("Provider: {value}")
+    }
+
+    pub fn auth_method(value: &str) -> String {
+        format!("Auth method: {value}")
+    }
+
+    pub fn provider_api_key(provider: &str, state: &str, detail: &str) -> String {
+        format!("{provider} API key: {state} ({detail})")
+    }
+
+    pub fn codex_login_status(state: &str) -> String {
+        format!("Codex login: {state}")
+    }
+
+    pub fn provider_missing_api_key(provider: &str, hint: &str) -> String {
+        format!("{provider} API key status: missing ({hint})")
     }
 }
 
