@@ -16,6 +16,7 @@ jobs:
         with:
           script: |
             const title = context.payload.pull_request.title;
+            const headRef = context.payload.pull_request.head.ref;
             const prefixMap = {
               'feat':  'enhancement',
               'fix':   'bug',
@@ -27,16 +28,25 @@ jobs:
               'test':  'chore',
             };
 
-            const match = title.match(/^(\w+)(\(.+\))?[!]?:/);
-            if (!match) return;
+            const labels = [];
+            if (/^chore\/release-v\d+\.\d+\.\d+$/.test(headRef)) {
+              labels.push('skip-release-notes');
+            }
 
-            const prefix = match[1];
-            const label = prefixMap[prefix];
-            if (!label) return;
+            const match = title.match(/^(\w+)(\(.+\))?[!]?:/);
+            if (match) {
+              const prefix = match[1];
+              const label = prefixMap[prefix];
+              if (label) {
+                labels.push(label);
+              }
+            }
+
+            if (labels.length === 0) return;
 
             await github.rest.issues.addLabels({
               owner: context.repo.owner,
               repo: context.repo.repo,
               issue_number: context.payload.pull_request.number,
-              labels: [label],
+              labels: [...new Set(labels)],
             });
