@@ -7,8 +7,11 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+
+use super::roots;
 
 // === Stage 1: Loose parsing types ===
 
@@ -81,18 +84,27 @@ impl CodexEntry {
             }
             "event_msg" if payload["type"].as_str() == Some("user_message") => {
                 let text = payload["message"].as_str().unwrap_or_default().to_string();
-                CodexEntry::UserMessage { timestamp: ts, text }
+                CodexEntry::UserMessage {
+                    timestamp: ts,
+                    text,
+                }
             }
             "response_item"
                 if payload["type"].as_str() == Some("message")
                     && payload["role"].as_str() == Some("assistant") =>
             {
                 let text = extract_codex_output_text(payload);
-                CodexEntry::AssistantMessage { timestamp: ts, text }
+                CodexEntry::AssistantMessage {
+                    timestamp: ts,
+                    text,
+                }
             }
             "response_item" if payload["type"].as_str() == Some("function_call") => {
                 let name = payload["name"].as_str().unwrap_or_default().to_string();
-                CodexEntry::FunctionCall { timestamp: ts, name }
+                CodexEntry::FunctionCall {
+                    timestamp: ts,
+                    name,
+                }
             }
             _ => CodexEntry::Other,
         }
@@ -115,58 +127,40 @@ fn extract_codex_output_text(payload: &serde_json::Value) -> String {
 
 // === File discovery ===
 
-/// Returns the Codex sessions directory path: ~/.codex/sessions/
+/// Returns all existing Codex session roots in priority order.
+/// Priority: config overrides -> CODEX_HOME -> native home -> WSL Windows homes.
+pub fn discover_codex_session_roots(config_roots: Option<&[String]>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(roots) = config_roots {
+        candidates.extend(roots.iter().map(PathBuf::from));
+    }
+
+    if let Some(codex_home) = std::env::var_os("CODEX_HOME") {
+        candidates.push(PathBuf::from(codex_home).join("sessions"));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".codex").join("sessions"));
+    }
+
+    if cfg!(target_os = "linux") && roots::is_wsl_environment() {
+        for win_home in roots::wsl_windows_home_candidates() {
+            candidates.push(win_home.join(".codex").join("sessions"));
+        }
+    }
+
+    roots::dedupe_existing_paths(candidates)
+}
+
+/// Backward-compatible single-root API.
 pub fn discover_codex_sessions_dir() -> Result<PathBuf, super::ParseError> {
+    if let Some(root) = discover_codex_session_roots(None).into_iter().next() {
+        return Ok(root);
+    }
+
     let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-    let default = home.join(".codex").join("sessions");
-    if default.exists() {
-        return Ok(default);
-    }
-
-    if cfg!(target_os = "linux") && is_wsl_environment() {
-        for win_home in wsl_windows_home_candidates() {
-            let candidate = win_home.join(".codex").join("sessions");
-            if candidate.exists() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    Ok(default)
-}
-
-fn is_wsl_environment() -> bool {
-    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return true;
-    }
-
-    std::fs::read_to_string("/proc/version")
-        .map(|s| s.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
-}
-
-fn wsl_windows_home_candidates() -> Vec<PathBuf> {
-    let mut homes: Vec<PathBuf> = Vec::new();
-    let mut push_home = |path: PathBuf| {
-        if !homes.iter().any(|p| p == &path) {
-            homes.push(path);
-        }
-    };
-
-    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
-        push_home(PathBuf::from(userprofile));
-    }
-
-    if let Ok(entries) = std::fs::read_dir("/mnt/c/Users") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                push_home(path);
-            }
-        }
-    }
-
-    homes
+    Ok(home.join(".codex").join("sessions"))
 }
 
 /// Lists session files for a specific date.
@@ -215,28 +209,28 @@ pub fn list_session_files_for_local_date(
 
 /// Extracts the local date from a CodexEntry's timestamp.
 pub fn entry_local_date(entry: &CodexEntry) -> Option<NaiveDate> {
-    let ts = match entry {
+    entry_timestamp(entry).map(|ts| ts.with_timezone(&chrono::Local).date_naive())
+}
+
+/// Returns UTC timestamp for timestamp-bearing Codex entries.
+pub fn entry_timestamp(entry: &CodexEntry) -> Option<DateTime<Utc>> {
+    match entry {
         CodexEntry::SessionMeta { timestamp, .. }
         | CodexEntry::UserMessage { timestamp, .. }
         | CodexEntry::AssistantMessage { timestamp, .. }
-        | CodexEntry::FunctionCall { timestamp, .. } => *timestamp,
-        CodexEntry::Other => return None,
-    };
-    Some(ts.with_timezone(&chrono::Local).date_naive())
+        | CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
+        CodexEntry::Other => None,
+    }
 }
 
 /// Filters Codex entries to only those belonging to the given local date.
 /// SessionMeta entries are always preserved regardless of date, because
 /// they carry session metadata needed by `summarize_codex_entries`.
-pub fn filter_entries_by_local_date(
-    entries: Vec<CodexEntry>,
-    date: NaiveDate,
-) -> Vec<CodexEntry> {
+pub fn filter_entries_by_local_date(entries: Vec<CodexEntry>, date: NaiveDate) -> Vec<CodexEntry> {
     entries
         .into_iter()
         .filter(|entry| {
-            matches!(entry, CodexEntry::SessionMeta { .. })
-                || entry_local_date(entry) == Some(date)
+            matches!(entry, CodexEntry::SessionMeta { .. }) || entry_local_date(entry) == Some(date)
         })
         .collect()
 }
@@ -268,6 +262,85 @@ pub fn parse_codex_jsonl_file(path: &Path) -> Result<Vec<CodexEntry>, super::Par
     }
 
     Ok(entries)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum CodexEntryFingerprint {
+    SessionMeta {
+        timestamp_millis: i64,
+        session_id: String,
+        cwd: String,
+        model_provider: String,
+    },
+    UserMessage {
+        timestamp_millis: i64,
+        text: String,
+    },
+    AssistantMessage {
+        timestamp_millis: i64,
+        text: String,
+    },
+    FunctionCall {
+        timestamp_millis: i64,
+        name: String,
+    },
+    Other,
+}
+
+fn entry_fingerprint(entry: &CodexEntry) -> CodexEntryFingerprint {
+    match entry {
+        CodexEntry::SessionMeta {
+            timestamp,
+            session_id,
+            cwd,
+            model_provider,
+        } => CodexEntryFingerprint::SessionMeta {
+            timestamp_millis: timestamp.timestamp_millis(),
+            session_id: session_id.clone(),
+            cwd: cwd.clone(),
+            model_provider: model_provider.clone(),
+        },
+        CodexEntry::UserMessage { timestamp, text } => CodexEntryFingerprint::UserMessage {
+            timestamp_millis: timestamp.timestamp_millis(),
+            text: text.clone(),
+        },
+        CodexEntry::AssistantMessage { timestamp, text } => {
+            CodexEntryFingerprint::AssistantMessage {
+                timestamp_millis: timestamp.timestamp_millis(),
+                text: text.clone(),
+            }
+        }
+        CodexEntry::FunctionCall { timestamp, name } => CodexEntryFingerprint::FunctionCall {
+            timestamp_millis: timestamp.timestamp_millis(),
+            name: name.clone(),
+        },
+        CodexEntry::Other => CodexEntryFingerprint::Other,
+    }
+}
+
+/// Dedupe Codex entries by fingerprint.
+pub fn dedupe_entries(entries: Vec<CodexEntry>) -> Vec<CodexEntry> {
+    let mut seen: HashSet<CodexEntryFingerprint> = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for entry in entries {
+        let fingerprint = entry_fingerprint(&entry);
+        if seen.insert(fingerprint) {
+            deduped.push(entry);
+        }
+    }
+
+    deduped
+}
+
+/// Sorts entries by timestamp while keeping non-timestamp entries at the end.
+pub fn sort_entries_by_timestamp(entries: &mut [CodexEntry]) {
+    entries.sort_by(|a, b| match (entry_timestamp(a), entry_timestamp(b)) {
+        (Some(left), Some(right)) => left.cmp(&right),
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (None, None) => std::cmp::Ordering::Equal,
+    });
 }
 
 // === Session summary ===
@@ -386,7 +459,8 @@ mod tests {
 
     #[test]
     fn test_parse_unknown_entry_returns_other() {
-        let json = r#"{"timestamp":"2026-03-16T09:04:00Z","type":"unknown_future_type","payload":{}}"#;
+        let json =
+            r#"{"timestamp":"2026-03-16T09:04:00Z","type":"unknown_future_type","payload":{}}"#;
         let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
         let entry = CodexEntry::from_raw(raw);
         assert!(matches!(entry, CodexEntry::Other));
@@ -398,6 +472,31 @@ mod tests {
         assert!(result.is_ok());
         let path = result.unwrap();
         assert_eq!(path.file_name().and_then(|n| n.to_str()), Some("sessions"));
+    }
+
+    #[test]
+    fn test_discover_codex_session_roots_keeps_config_priority() {
+        let base = std::env::temp_dir().join(format!(
+            "rwd_test_codex_roots_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).expect("first dir");
+        std::fs::create_dir_all(&second).expect("second dir");
+
+        let overrides = vec![
+            first.to_string_lossy().to_string(),
+            second.to_string_lossy().to_string(),
+            first.to_string_lossy().to_string(),
+        ];
+        let roots = discover_codex_session_roots(Some(&overrides));
+        assert!(roots.starts_with(&[first.clone(), second.clone()]));
+
+        std::fs::remove_dir_all(&base).ok();
     }
 
     #[test]
@@ -423,9 +522,11 @@ mod tests {
         let files = list_session_files_for_date(&base, date).unwrap();
 
         assert_eq!(files.len(), 2);
-        assert!(files
-            .iter()
-            .all(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl")));
+        assert!(
+            files
+                .iter()
+                .all(|p| p.extension().and_then(|e| e.to_str()) == Some("jsonl"))
+        );
 
         std::fs::remove_dir_all(&base).unwrap();
     }
@@ -460,8 +561,33 @@ mod tests {
     }
 
     #[test]
+    fn test_dedupe_entries_removes_exact_duplicates() {
+        use chrono::TimeZone;
+        let ts = chrono::Utc.with_ymd_and_hms(2026, 3, 16, 12, 0, 0).unwrap();
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: ts,
+                session_id: "s1".to_string(),
+                cwd: "/p".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: ts,
+                text: "hello".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: ts,
+                text: "hello".to_string(),
+            },
+        ];
+
+        let deduped = dedupe_entries(entries);
+        assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
     fn test_summarize_codex_entries_counts_correctly() {
-        let raws = vec![
+        let raws = [
             r#"{"timestamp":"2026-03-16T09:00:00Z","type":"session_meta","payload":{"id":"sess-xyz","cwd":"/project","model_provider":"openai"}}"#,
             r#"{"timestamp":"2026-03-16T09:01:00Z","type":"event_msg","payload":{"type":"user_message","message":"msg1"}}"#,
             r#"{"timestamp":"2026-03-16T09:02:00Z","type":"event_msg","payload":{"type":"user_message","message":"msg2"}}"#,
