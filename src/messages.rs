@@ -55,8 +55,6 @@ pub mod config {
     pub const NAV_HINT: &str =
         "  \u{2191}\u{2193} Navigate \u{00B7} Enter Select \u{00B7} Esc Exit";
     pub const NO_CHANGE: &str = "  No change";
-    pub const NEW_API_KEY: &str = "  New API key: ";
-    pub const CONFIRM_API_KEY: &str = "Change API key?";
     pub const USAGE: &str = "Usage: `rwd config` (interactive) or `rwd config <key> <value>` (keys: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning)";
 
     pub fn config_saved(path: &dyn std::fmt::Display) -> String {
@@ -77,6 +75,14 @@ pub mod config {
 
     pub fn api_key_changed(masked: &str) -> String {
         format!("API key changed: {masked}")
+    }
+
+    pub fn new_provider_api_key(provider: &str) -> String {
+        format!("  New {provider} API key: ")
+    }
+
+    pub fn confirm_provider_api_key(provider: &str) -> String {
+        format!("Change {provider} API key?")
     }
 
     pub fn provider_api_key_changed(provider: &str, masked: &str) -> String {
@@ -130,6 +136,20 @@ pub mod config {
     }
 }
 
+/// Messages for `rwd reset`.
+pub mod reset {
+    pub const CONFIRM: &str = "This will remove rwd config/cache files. Continue?";
+    pub const CANCELLED: &str = "Reset cancelled.";
+    pub const NOTHING_TO_RESET: &str = "Nothing to reset.";
+    pub const DRY_RUN_HEADER: &str = "Reset dry-run (no files removed):";
+    pub const REMOVED_HEADER: &str = "Reset completed. Removed:";
+    pub const NEXT_STEP: &str = "Next: run `rwd init` to set up configuration again.";
+
+    pub fn item(path: &dyn std::fmt::Display) -> String {
+        format!(" - {path}")
+    }
+}
+
 /// Messages for `rwd auth status`.
 pub mod auth {
     pub fn provider(value: &str) -> String {
@@ -179,6 +199,10 @@ pub mod error {
 
     pub fn unsupported_platform(os: &str, arch: &str) -> String {
         format!("Unsupported platform: {os}-{arch}")
+    }
+
+    pub fn unsupported_provider_in_config(provider: &str) -> String {
+        format!("Unsupported provider in config: '{provider}'. Available: anthropic, openai, codex")
     }
 
     pub fn api_request_failed(status: &dyn std::fmt::Display, body: &str) -> String {
@@ -353,6 +377,13 @@ pub mod status {
     pub fn rate_limit_fallback(itpm: u64, otpm: u64, rpm: u64) -> String {
         format!(
             "\u{26A0} Rate limit check failed, proceeding with defaults. \
+             (ITPM: {itpm} | OTPM: {otpm} | RPM: {rpm})"
+        )
+    }
+
+    pub fn rate_limit_probe_skipped(provider: &str, itpm: u64, otpm: u64, rpm: u64) -> String {
+        format!(
+            "\u{2139} Rate limit check is not supported for {provider}; using defaults. \
              (ITPM: {itpm} | OTPM: {otpm} | RPM: {rpm})"
         )
     }

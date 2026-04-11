@@ -33,8 +33,10 @@ async fn main() {
 
     // Show update notification only for synchronous commands.
     // Worker mode skips this to avoid blocking (no terminal).
-    let skip_update = matches!(args.command, Commands::Update | Commands::Doctor)
-        || matches!(args.command, Commands::Today { worker: true, .. });
+    let skip_update = matches!(
+        args.command,
+        Commands::Update | Commands::Doctor | Commands::Reset { .. }
+    ) || matches!(args.command, Commands::Today { worker: true, .. });
     if !skip_update {
         update::notify_if_update_available().await;
     }
@@ -100,6 +102,12 @@ async fn main() {
         Commands::Update => {
             if let Err(e) = update::run_update().await {
                 eprintln!("{}", crate::messages::error::update_failed(&e));
+                std::process::exit(1);
+            }
+        }
+        Commands::Reset { yes, dry_run } => {
+            if let Err(e) = config::run_reset(yes, dry_run) {
+                eprintln!("{}", crate::messages::error::config_failed(&e));
                 std::process::exit(1);
             }
         }

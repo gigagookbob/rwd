@@ -29,6 +29,8 @@ Examples:
   rwd config openai-api-key sk-...  Set OpenAI API key
   rwd config anthropic-api-key ...  Set Anthropic API key
   rwd auth status                   Show provider auth status
+  rwd reset --dry-run               Preview files that reset will remove
+  rwd reset --yes                   Reset config/cache without confirmation
   rwd doctor                        Run environment and install diagnostics
   rwd update                        Update to the latest version"
 )]
@@ -114,6 +116,15 @@ Examples:
     },
     /// Update to the latest version via GitHub Releases
     Update,
+    /// Reset local rwd config/cache state
+    Reset {
+        /// Skip confirmation prompt
+        #[arg(long)]
+        yes: bool,
+        /// Preview reset targets without removing files
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Show authentication status for current provider
     #[command(after_help = "\
 Example:

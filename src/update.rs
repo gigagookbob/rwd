@@ -17,6 +17,20 @@ fn is_newer(latest: &str, current: &str) -> bool {
     }
 }
 
+fn is_local_dev_binary(current_exe: &Path) -> bool {
+    let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
+    current_exe.starts_with(manifest_target)
+}
+
+fn should_skip_update_notice(current_exe: &Path) -> bool {
+    if std::env::var_os("RWD_FORCE_UPDATE_CHECK").is_some() {
+        return false;
+    }
+    cfg!(debug_assertions)
+        || is_local_dev_binary(current_exe)
+        || std::env::var_os("RWD_DISABLE_UPDATE_CHECK").is_some()
+}
+
 /// Fetches the latest release tag from GitHub API.
 pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>> {
     let url = format!("https://api.github.com/repos/{REPO}/releases/latest");
@@ -41,6 +55,13 @@ pub async fn check_latest_version() -> Result<String, Box<dyn std::error::Error>
 /// Prints update notice if a newer version exists.
 /// Cache strategy: 24h TTL when update available, always recheck when current.
 pub async fn notify_if_update_available() {
+    let Ok(current_exe) = std::env::current_exe() else {
+        return;
+    };
+    if should_skip_update_notice(&current_exe) {
+        return;
+    }
+
     if let Some(cached) = crate::cache::load_update_check() {
         let now = chrono::Utc::now();
         let interval = chrono::Duration::hours(24);
@@ -512,6 +533,21 @@ mod tests {
     fn invalid_version_falls_back_to_string_compare() {
         assert!(is_newer("not-a-version", "0.11.4"));
         assert!(!is_newer("same", "same"));
+    }
+
+    #[test]
+    fn local_dev_binary_detects_manifest_target_path() {
+        let current = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("target")
+            .join("debug")
+            .join("rwd");
+        assert!(super::is_local_dev_binary(&current));
+    }
+
+    #[test]
+    fn local_dev_binary_false_for_installed_path() {
+        let current = std::path::Path::new("/usr/local/bin/rwd");
+        assert!(!super::is_local_dev_binary(current));
     }
 
     #[cfg(unix)]
