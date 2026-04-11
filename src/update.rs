@@ -1,6 +1,6 @@
 // Version check and self-update via GitHub Releases.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 const REPO: &str = "gigagookbob/rwd";
 const CURRENT_VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -81,7 +81,11 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
 
     let latest = check_latest_version().await?;
 
+    let current_exe = std::env::current_exe()?;
+
     if !is_newer(&latest, CURRENT_VERSION) {
+        #[cfg(unix)]
+        warn_duplicate_binaries_in_path(&current_exe);
         eprintln!(
             "{}",
             crate::messages::update::already_latest(CURRENT_VERSION)
@@ -126,8 +130,6 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // Find extracted binary
     let extracted = find_binary_in_dir(&tmp_dir)?;
 
-    let current_exe = std::env::current_exe()?;
-
     // Update cache before potential process exit (Windows deferred path)
     let cache = crate::cache::UpdateCheckCache {
         checked_at: chrono::Utc::now(),
@@ -146,9 +148,19 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // On Unix, replace in-place.
     #[cfg(unix)]
     {
-        replace_binary_unix(&extracted, &current_exe)?;
+        let user_target = replace_binary_unix(&extracted, &current_exe)?;
         std::fs::remove_dir_all(&tmp_dir).ok();
-        eprintln!("{}", crate::messages::update::update_complete(&latest));
+        let active_target = user_target.clone().unwrap_or_else(|| current_exe.clone());
+        if let Some(path) = user_target {
+            eprintln!(
+                "{}",
+                crate::messages::update::user_bin_update_complete(&path.display(), &latest)
+            );
+            eprintln!("{}", crate::messages::update::USER_BIN_PATH_HINT);
+        } else {
+            eprintln!("{}", crate::messages::update::update_complete(&latest));
+        }
+        warn_duplicate_binaries_in_path(&active_target);
     }
 
     #[allow(unreachable_code)]
@@ -279,13 +291,17 @@ fn schedule_deferred_replace(
 fn replace_binary_unix(
     new_binary: &std::path::Path,
     target: &std::path::Path,
-) -> Result<(), Box<dyn std::error::Error>> {
+) -> Result<Option<PathBuf>, Box<dyn std::error::Error>> {
     use std::os::unix::fs::PermissionsExt;
     std::fs::set_permissions(new_binary, std::fs::Permissions::from_mode(0o755))?;
 
     match stage_and_rename_unix(new_binary, target) {
-        Ok(_) => Ok(()),
+        Ok(_) => Ok(None),
         Err(e) if e.kind() == std::io::ErrorKind::PermissionDenied => {
+            if let Ok(Some(user_target)) = try_replace_in_user_bin(new_binary, target) {
+                return Ok(Some(user_target));
+            }
+
             eprintln!("{}", crate::messages::error::ADMIN_REQUIRED);
             // Privileged fallback: copy to sibling temp path, then atomic rename.
             let staged = target.with_extension("new");
@@ -320,12 +336,119 @@ fn replace_binary_unix(
                 ])
                 .status()?;
             if move_status.success() {
-                return Ok(());
+                return Ok(None);
             }
             Err(crate::messages::error::BINARY_REPLACE_FAILED.into())
         }
         Err(e) => Err(e.into()),
     }
+}
+
+#[cfg(unix)]
+fn try_replace_in_user_bin(
+    new_binary: &std::path::Path,
+    target: &std::path::Path,
+) -> Result<Option<PathBuf>, std::io::Error> {
+    let home = match std::env::var_os("HOME") {
+        Some(home) => PathBuf::from(home),
+        None => return Ok(None),
+    };
+    let Some(user_target) = user_bin_target_for(target, &home) else {
+        return Ok(None);
+    };
+    let Some(parent) = user_target.parent() else {
+        return Ok(None);
+    };
+
+    std::fs::create_dir_all(parent)?;
+    stage_and_rename_unix(new_binary, &user_target)?;
+    Ok(Some(user_target))
+}
+
+#[cfg(unix)]
+fn user_bin_target_for(target: &std::path::Path, home: &std::path::Path) -> Option<PathBuf> {
+    let file_name = target.file_name()?;
+    let user_target = home.join(".local").join("bin").join(file_name);
+    if user_target == target {
+        return None;
+    }
+    Some(user_target)
+}
+
+#[cfg(unix)]
+fn warn_duplicate_binaries_in_path(active_binary: &Path) {
+    use std::collections::HashSet;
+
+    let Some(path_var) = std::env::var_os("PATH") else {
+        return;
+    };
+
+    let mut seen = HashSet::new();
+    let mut visible = Vec::new();
+
+    for dir in std::env::split_paths(&path_var) {
+        let candidate = dir.join("rwd");
+        if !candidate.is_file() {
+            continue;
+        }
+        let normalized = normalized_path(&candidate);
+        if !seen.insert(normalized.clone()) {
+            continue;
+        }
+        visible.push(candidate);
+    }
+
+    if visible.is_empty() {
+        return;
+    }
+
+    let requested_active = normalized_path(active_binary);
+    let active = if visible
+        .iter()
+        .any(|candidate| normalized_path(candidate) == requested_active)
+    {
+        active_binary.to_path_buf()
+    } else {
+        visible[0].clone()
+    };
+    let active_normalized = normalized_path(&active);
+    let duplicates: Vec<PathBuf> = visible
+        .into_iter()
+        .filter(|candidate| normalized_path(candidate) != active_normalized)
+        .collect();
+
+    if duplicates.is_empty() {
+        return;
+    }
+
+    eprintln!("{}", crate::messages::update::DUPLICATE_BINARIES_FOUND);
+    eprintln!(
+        "{}",
+        crate::messages::update::active_binary(&active.display())
+    );
+    for duplicate in duplicates {
+        let command = cleanup_command_for_duplicate(&duplicate);
+        eprintln!(
+            "{}",
+            crate::messages::update::cleanup_duplicate(&duplicate.display(), &command)
+        );
+    }
+}
+
+#[cfg(unix)]
+fn normalized_path(path: &Path) -> PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+#[cfg(unix)]
+fn cleanup_command_for_duplicate(path: &Path) -> String {
+    if path == Path::new("/usr/local/bin/rwd") {
+        return "sudo rm /usr/local/bin/rwd".to_string();
+    }
+    if path.to_string_lossy().ends_with("/.cargo/bin/rwd") {
+        return "cargo uninstall rwd".to_string();
+    }
+    format!("rm {}", path.display())
 }
 
 #[cfg(unix)]
@@ -415,5 +538,42 @@ mod tests {
         assert_eq!(replaced, b"new-content");
 
         std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_bin_target_for_system_binary_returns_local_bin_path() {
+        let home = std::path::PathBuf::from("/Users/tester");
+        let target = std::path::PathBuf::from("/usr/local/bin/rwd");
+        let actual = super::user_bin_target_for(&target, &home).expect("target path");
+        assert_eq!(
+            actual,
+            std::path::PathBuf::from("/Users/tester/.local/bin/rwd")
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn user_bin_target_for_same_path_returns_none() {
+        let home = std::path::PathBuf::from("/Users/tester");
+        let target = std::path::PathBuf::from("/Users/tester/.local/bin/rwd");
+        let actual = super::user_bin_target_for(&target, &home);
+        assert!(actual.is_none());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_command_for_usr_local_uses_sudo_remove() {
+        let path = std::path::PathBuf::from("/usr/local/bin/rwd");
+        let command = super::cleanup_command_for_duplicate(&path);
+        assert_eq!(command, "sudo rm /usr/local/bin/rwd");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn cleanup_command_for_cargo_bin_uses_cargo_uninstall() {
+        let path = std::path::PathBuf::from("/Users/tester/.cargo/bin/rwd");
+        let command = super::cleanup_command_for_duplicate(&path);
+        assert_eq!(command, "cargo uninstall rwd");
     }
 }
