@@ -12,7 +12,7 @@ set -euo pipefail
 # Usage: curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
 
 REPO="gigagookbob/rwd"
-INSTALL_DIR="/usr/local/bin"
+INSTALL_DIR="${RWD_INSTALL_DIR:-$HOME/.local/bin}"
 BINARY_NAME="rwd"
 
 # Fetch latest release tag.
@@ -74,6 +74,7 @@ if [ -z "$EXTRACTED" ]; then
 fi
 
 # Install binary
+mkdir -p "$INSTALL_DIR"
 chmod +x "$EXTRACTED"
 if [ -w "$INSTALL_DIR" ]; then
     mv "$EXTRACTED" "${INSTALL_DIR}/${BINARY_NAME}"
@@ -104,7 +105,7 @@ case ":${PATH}:" in
     *)
         echo ""
         echo "Note: ${INSTALL_DIR} is not in PATH for this shell."
-        echo "Add this line to ~/.bashrc, then restart your terminal:"
+        echo "Add this line to ~/.zshrc (or ~/.bashrc), then restart your terminal:"
         echo "  export PATH=\"${INSTALL_DIR}:\$PATH\""
         ;;
 esac
