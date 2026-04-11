@@ -35,6 +35,9 @@ pub struct Config {
     pub redactor: Option<RedactorConfig>,
     /// LLM output language. None triggers migration prompt on first use.
     pub lang: Option<Lang>,
+    /// Optional input root overrides for agent session logs.
+    #[serde(default)]
+    pub input: Option<InputConfig>,
 }
 
 impl Config {
@@ -66,6 +69,15 @@ pub struct OutputConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct RedactorConfig {
     pub enabled: bool,
+}
+
+/// Optional input overrides for agent log discovery roots.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputConfig {
+    #[serde(default)]
+    pub codex_roots: Option<Vec<String>>,
+    #[serde(default)]
+    pub claude_roots: Option<Vec<String>>,
 }
 
 /// Returns the config file path: ~/.config/rwd/config.toml
@@ -201,6 +213,7 @@ pub fn run_init() -> Result<(), ConfigError> {
         },
         redactor: None,
         lang: Some(lang),
+        input: None,
     };
 
     save_config(&config, &config_file)?;
@@ -830,7 +843,11 @@ fn detect_vault_from_obsidian_json() -> Option<PathBuf> {
     // WSL fallback: Obsidian for Windows stores config under %APPDATA%.
     if cfg!(target_os = "linux") && is_wsl_environment() {
         if let Some(appdata) = std::env::var_os("APPDATA") {
-            push_candidate(PathBuf::from(appdata).join("obsidian").join("obsidian.json"));
+            push_candidate(
+                PathBuf::from(appdata)
+                    .join("obsidian")
+                    .join("obsidian.json"),
+            );
         }
         if let Some(userprofile) = std::env::var_os("USERPROFILE") {
             push_candidate(
@@ -985,6 +1002,7 @@ mod tests {
             },
             redactor: None,
             lang: Some(Lang::En),
+            input: None,
         };
 
         save_config(&config, &path).expect("save");
@@ -1055,7 +1073,7 @@ path = "/tmp/vault"
 enabled = false
 "#;
         let config: Config = toml::from_str(toml_str).expect("parse");
-        assert_eq!(config.redactor.unwrap().enabled, false);
+        assert!(!config.redactor.unwrap().enabled);
     }
 
     #[test]
@@ -1106,6 +1124,49 @@ path = "/tmp/vault"
     }
 
     #[test]
+    fn test_config_input_none_when_missing() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        assert!(config.input.is_none());
+    }
+
+    #[test]
+    fn test_config_input_parses_root_overrides() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+
+[input]
+codex_roots = ["/home/jinwoo/.codex/sessions", "/mnt/c/Users/jinwoo/.codex/sessions"]
+claude_roots = ["/home/jinwoo/.claude/projects"]
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        let input = config.input.expect("input section");
+        assert_eq!(
+            input.codex_roots,
+            Some(vec![
+                "/home/jinwoo/.codex/sessions".to_string(),
+                "/mnt/c/Users/jinwoo/.codex/sessions".to_string()
+            ])
+        );
+        assert_eq!(
+            input.claude_roots,
+            Some(vec!["/home/jinwoo/.claude/projects".to_string()])
+        );
+    }
+
+    #[test]
     fn test_lang_display() {
         assert_eq!(Lang::En.to_string(), "en");
         assert_eq!(Lang::Ko.to_string(), "ko");
@@ -1125,6 +1186,7 @@ path = "/tmp/vault"
             },
             redactor: None,
             lang: Some(Lang::Ko),
+            input: None,
         };
         let serialized = toml::to_string_pretty(&config).expect("serialize");
         assert!(serialized.contains("lang = \"ko\""));

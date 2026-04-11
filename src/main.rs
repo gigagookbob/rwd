@@ -21,6 +21,11 @@ const RED: &str = "\x1b[31m";
 const GREEN: &str = "\x1b[32m";
 const RESET: &str = "\x1b[0m";
 
+type CodexCollectedSession = (
+    parser::codex::CodexSessionSummary,
+    Vec<parser::codex::CodexEntry>,
+);
+
 #[tokio::main]
 async fn main() {
     let args = cli::Cli::parse();
@@ -34,7 +39,14 @@ async fn main() {
     }
 
     match args.command {
-        Commands::Today { verbose, lang, date, background, worker } => {
+        Commands::Today {
+            verbose,
+            lang,
+            date,
+            background,
+            no_cache,
+            worker,
+        } => {
             let target_date = match parse_date_flag(&date) {
                 Ok(d) => d,
                 Err(e) => {
@@ -43,7 +55,7 @@ async fn main() {
                 }
             };
             if worker {
-                if let Err(e) = run_worker(lang, target_date).await {
+                if let Err(e) = run_worker(lang, target_date, no_cache).await {
                     let log_path = worker_log_path();
                     if let Some(parent) = log_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -56,12 +68,12 @@ async fn main() {
                     std::process::exit(1);
                 }
             } else if background {
-                if let Err(e) = spawn_worker(&lang, &date) {
+                if let Err(e) = spawn_worker(&lang, &date, no_cache) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
             } else {
-                if let Err(e) = run_today(verbose, lang, target_date).await {
+                if let Err(e) = run_today(verbose, lang, target_date, no_cache).await {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -90,7 +102,11 @@ async fn main() {
                 std::process::exit(1);
             }
         }
-        Commands::Summary { lang, date } => {
+        Commands::Summary {
+            lang,
+            date,
+            no_cache,
+        } => {
             let target_date = match parse_date_flag(&date) {
                 Ok(d) => d,
                 Err(e) => {
@@ -98,12 +114,16 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            if let Err(e) = run_summary(lang, target_date).await {
+            if let Err(e) = run_summary(lang, target_date, no_cache).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
-        Commands::Slack { lang, date } => {
+        Commands::Slack {
+            lang,
+            date,
+            no_cache,
+        } => {
             let target_date = match parse_date_flag(&date) {
                 Ok(d) => d,
                 Err(e) => {
@@ -111,7 +131,7 @@ async fn main() {
                     std::process::exit(1);
                 }
             };
-            if let Err(e) = run_slack(lang, target_date).await {
+            if let Err(e) = run_slack(lang, target_date, no_cache).await {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
@@ -183,7 +203,11 @@ fn is_worker_running() -> bool {
 }
 
 /// Spawns a background worker process.
-fn spawn_worker(lang_flag: &Option<String>, date_flag: &Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+fn spawn_worker(
+    lang_flag: &Option<String>,
+    date_flag: &Option<String>,
+    no_cache: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     if is_worker_running() {
         println!("{}", crate::messages::background::ALREADY_RUNNING);
         return Ok(());
@@ -206,6 +230,9 @@ fn spawn_worker(lang_flag: &Option<String>, date_flag: &Option<String>) -> Resul
         args.push("--date".to_string());
         args.push(date.clone());
     }
+    if no_cache {
+        args.push("--no-cache".to_string());
+    }
 
     let child = std::process::Command::new(exe)
         .args(&args)
@@ -217,24 +244,32 @@ fn spawn_worker(lang_flag: &Option<String>, date_flag: &Option<String>) -> Resul
     println!("  {}", crate::messages::background::NOTIFIED_WHEN_DONE);
 
     // Show where results will be saved.
-    let display_date = parse_date_flag(date_flag).unwrap_or_else(|_| chrono::Local::now().date_naive());
+    let display_date =
+        parse_date_flag(date_flag).unwrap_or_else(|_| chrono::Local::now().date_naive());
     if let Ok(vault_path) = output::load_vault_path() {
         let file_path = vault_path.join(format!("{display_date}.md"));
-        println!("  {}", crate::messages::background::results_path(&file_path.display()));
+        println!(
+            "  {}",
+            crate::messages::background::results_path(&file_path.display())
+        );
     }
 
     Ok(())
 }
 
 /// Runs as a background worker: lock, analyze, notify, unlock.
-async fn run_worker(lang: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_worker(
+    lang: Option<String>,
+    target_date: chrono::NaiveDate,
+    no_cache: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let lock_path = worker_lock_path();
     if let Some(parent) = lock_path.parent() {
         let _ = std::fs::create_dir_all(parent);
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let result = run_today(false, lang, target_date).await;
+    let result = run_today(false, lang, target_date, no_cache).await;
 
     // Always clean up lock file
     let _ = std::fs::remove_file(&lock_path);
@@ -308,7 +343,12 @@ fn resolve_lang(
 }
 
 /// Parses session logs for the given date, runs LLM analysis, and prints insights.
-async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), parser::ParseError> {
+async fn run_today(
+    verbose: bool,
+    lang_flag: Option<String>,
+    target_date: chrono::NaiveDate,
+    no_cache: bool,
+) -> Result<(), parser::ParseError> {
     let mut loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
         eprintln!("{}", crate::messages::error::NO_CONFIG);
@@ -321,19 +361,45 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
     let today = target_date;
 
     // === Collect Claude Code logs ===
-    let (claude_entries, claude_discovery) = collect_claude_entries_with_stats(today);
+    let (claude_entries, claude_discovery) =
+        collect_claude_entries_with_stats(today, loaded_config.as_ref());
 
     // === Collect Codex logs ===
-    let codex_sessions = collect_codex_sessions(today);
+    let (codex_sessions, codex_roots) = collect_codex_sessions(today, loaded_config.as_ref());
+
+    let codex_entry_count: usize = codex_sessions
+        .iter()
+        .map(|(_, entries)| entries.len())
+        .sum();
 
     if verbose {
-        let codex_entry_count: usize = codex_sessions.iter().map(|(_, entries)| entries.len()).sum();
-        eprintln!("{}", crate::messages::verbose::discover_stats(
-            claude_discovery.project_count,
-            claude_discovery.file_count,
-            claude_discovery.total_entries,
-            claude_entries.len() + codex_entry_count,
-        ));
+        eprintln!(
+            "{}",
+            crate::messages::verbose::discover_stats(
+                claude_discovery.project_count,
+                claude_discovery.file_count,
+                claude_discovery.total_entries,
+                claude_entries.len() + codex_entry_count,
+            )
+        );
+        if !claude_discovery.roots.is_empty() {
+            eprintln!(
+                "{}",
+                crate::messages::verbose::used_roots(
+                    "Claude",
+                    &format_roots_for_display(&claude_discovery.roots)
+                )
+            );
+        }
+        if !codex_roots.is_empty() {
+            eprintln!(
+                "{}",
+                crate::messages::verbose::used_roots(
+                    "Codex",
+                    &format_roots_for_display(&codex_roots)
+                )
+            );
+        }
     }
 
     if claude_entries.is_empty() && codex_sessions.is_empty() {
@@ -342,7 +408,7 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
     }
 
     let claude_count = claude_entries.len();
-    let codex_count = codex_sessions.len();
+    let codex_session_count = codex_sessions.len();
 
     // === Logo banner ===
     print_logo_banner();
@@ -363,9 +429,12 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
 
     // === Cache check ===
     // Reuse previous analysis if the entry count is unchanged.
-    if let Some(cached) = cache::load_cache(today)
+    if no_cache {
+        println!("\n{}", crate::messages::status::CACHE_BYPASSED);
+    } else if let Some(cached) = cache::load_cache(today)
         && cached.claude_entry_count == claude_count
-        && cached.codex_session_count == codex_count
+        && cached.codex_session_count == codex_session_count
+        && cached.codex_entry_count == codex_entry_count
     {
         println!("\n{}", crate::messages::status::CACHE_USED);
         let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
@@ -384,28 +453,40 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
     let provider_label = analyzer::provider::load_provider()
         .map(|(p, _)| p.display_name().to_string())
         .unwrap_or_else(|_| "LLM".to_string());
-    println!("\n{MAGENTA}{}{RESET}", crate::messages::status::analyzing(&provider_label));
+    println!(
+        "\n{MAGENTA}{}{RESET}",
+        crate::messages::status::analyzing(&provider_label)
+    );
 
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
 
     // Claude analysis
     if !claude_entries.is_empty() {
-        let (result, redact_result) = analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose, &lang).await?;
+        let (result, redact_result) =
+            analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose, &lang).await?;
         total_redact.merge(redact_result);
         sources.push(("Claude Code".to_string(), result));
     }
 
     // Codex analysis — runs after Claude spinner finishes; fast enough to skip a spinner.
     for (summary, entries) in &codex_sessions {
-        let (result, redact_result) = analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled, &lang).await?;
+        let (result, redact_result) =
+            analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled, &lang)
+                .await?;
         total_redact.merge(redact_result);
         sources.push(("Codex".to_string(), result));
     }
 
     // Output and save results
     if total_redact.total_count > 0 {
-        println!("{}", crate::messages::status::redacted(total_redact.total_count, &total_redact.format_summary()));
+        println!(
+            "{}",
+            crate::messages::status::redacted(
+                total_redact.total_count,
+                &total_redact.format_summary()
+            )
+        );
     }
 
     if !sources.is_empty() {
@@ -422,7 +503,8 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
         let cache_data = cache::TodayCache {
             date: today.to_string(),
             claude_entry_count: claude_count,
-            codex_session_count: codex_count,
+            codex_session_count,
+            codex_entry_count,
             sources,
         };
         if let Err(e) = cache::save_cache(&cache_data, today) {
@@ -434,10 +516,13 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
                 .join("cache")
                 .join(format!("today-{today}.json"));
             if let Ok(meta) = std::fs::metadata(&cache_path) {
-                eprintln!("{}", crate::messages::verbose::cache_saved(
-                    &cache_path.display(),
-                    meta.len() as f64 / 1024.0,
-                ));
+                eprintln!(
+                    "{}",
+                    crate::messages::verbose::cache_saved(
+                        &cache_path.display(),
+                        meta.len() as f64 / 1024.0,
+                    )
+                );
             }
         }
 
@@ -452,14 +537,22 @@ async fn run_today(verbose: bool, lang_flag: Option<String>, target_date: chrono
 /// 1. Loads today's cache (runs `run_today()` first if missing).
 /// 2. Collects work_summary from all sessions and sends to LLM.
 /// 3. Prints summary to terminal, appends to daily Markdown, copies to clipboard.
-async fn run_summary(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_summary(
+    _lang_flag: Option<String>,
+    target_date: chrono::NaiveDate,
+    no_cache: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let today = target_date;
+
+    if no_cache {
+        run_today(false, None, today, true).await?;
+    }
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None, today).await?;
+            run_today(false, None, today, false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -488,8 +581,7 @@ async fn run_summary(_lang_flag: Option<String>, target_date: chrono::NaiveDate)
 
     println!("{}", crate::messages::status::SUMMARY_GENERATING);
     let mut loaded_config = config::load_config_if_exists();
-    let lang = resolve_lang(&_lang_flag, &mut loaded_config)
-        .unwrap_or(config::Lang::En);
+    let lang = resolve_lang(&_lang_flag, &mut loaded_config).unwrap_or(config::Lang::En);
     let summary = analyzer::analyze_summary(&summaries_text, &lang).await?;
 
     println!("\n{}", crate::messages::status::SUMMARY_HEADER);
@@ -508,14 +600,22 @@ async fn run_summary(_lang_flag: Option<String>, target_date: chrono::NaiveDate)
 ///
 /// Similar to `run_summary()` but uses SLACK_PROMPT for Slack-friendly formatting.
 /// Only outputs to terminal and copies to clipboard (no Obsidian save).
-async fn run_slack(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -> Result<(), Box<dyn std::error::Error>> {
+async fn run_slack(
+    _lang_flag: Option<String>,
+    target_date: chrono::NaiveDate,
+    no_cache: bool,
+) -> Result<(), Box<dyn std::error::Error>> {
     let today = target_date;
+
+    if no_cache {
+        run_today(false, None, today, true).await?;
+    }
 
     let cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None, today).await?;
+            run_today(false, None, today, false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -527,12 +627,24 @@ async fn run_slack(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -
     };
 
     // Warn if cache is stale (entry count mismatch).
-    let claude_count = collect_claude_entries(today).len();
-    let codex_count = collect_codex_sessions(today).len();
-    if cached.claude_entry_count != claude_count || cached.codex_session_count != codex_count {
-        let cached_total = cached.claude_entry_count + cached.codex_session_count;
-        let current_total = claude_count + codex_count;
-        eprintln!("{YELLOW}{}{RESET}", crate::messages::status::cache_stale(cached_total, current_total));
+    let mut loaded_config = config::load_config_if_exists();
+    let claude_count = collect_claude_entries(today, loaded_config.as_ref()).len();
+    let (codex_sessions, _) = collect_codex_sessions(today, loaded_config.as_ref());
+    let codex_session_count = codex_sessions.len();
+    let codex_entry_count: usize = codex_sessions
+        .iter()
+        .map(|(_, entries)| entries.len())
+        .sum();
+    if cached.claude_entry_count != claude_count
+        || cached.codex_session_count != codex_session_count
+        || cached.codex_entry_count != codex_entry_count
+    {
+        let cached_total = cached.claude_entry_count + cached.codex_entry_count;
+        let current_total = claude_count + codex_entry_count;
+        eprintln!(
+            "{YELLOW}{}{RESET}",
+            crate::messages::status::cache_stale(cached_total, current_total)
+        );
         eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
         eprintln!();
     }
@@ -554,9 +666,7 @@ async fn run_slack(_lang_flag: Option<String>, target_date: chrono::NaiveDate) -
     }
 
     println!("{}", crate::messages::status::SLACK_GENERATING);
-    let mut loaded_config = config::load_config_if_exists();
-    let lang = resolve_lang(&_lang_flag, &mut loaded_config)
-        .unwrap_or(config::Lang::En);
+    let lang = resolve_lang(&_lang_flag, &mut loaded_config).unwrap_or(config::Lang::En);
     let slack_message = analyzer::analyze_slack(&summaries_text, &lang).await?;
 
     println!("\n{slack_message}");
@@ -603,7 +713,10 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
 
     let file_path = vault_path.join(format!("{date}.md"));
     if !file_path.exists() {
-        eprintln!("{}", crate::messages::error::daily_markdown_not_found(&file_path.display()));
+        eprintln!(
+            "{}",
+            crate::messages::error::daily_markdown_not_found(&file_path.display())
+        );
         return;
     }
 
@@ -627,13 +740,21 @@ fn append_summary_to_markdown(date: chrono::NaiveDate, summary: &str) {
             .map(|pos| after_header + pos + 1)
             .unwrap_or(existing.len());
 
-        format!("{}{}\n{}", &existing[..start], new_section, &existing[end..])
+        format!(
+            "{}{}\n{}",
+            &existing[..start],
+            new_section,
+            &existing[end..]
+        )
     } else {
         format!("{}\n{}\n", existing.trim_end(), new_section)
     };
 
     match std::fs::write(&file_path, updated) {
-        Ok(()) => println!("{}", crate::messages::status::markdown_saved(&file_path.display())),
+        Ok(()) => println!(
+            "{}",
+            crate::messages::status::markdown_saved(&file_path.display())
+        ),
         Err(e) => eprintln!("{}", crate::messages::error::file_save_failed(&e)),
     }
 }
@@ -643,90 +764,181 @@ struct DiscoveryStats {
     project_count: usize,
     file_count: usize,
     total_entries: usize,
+    roots: Vec<std::path::PathBuf>,
+}
+
+fn claude_root_overrides(config: Option<&config::Config>) -> Option<&[String]> {
+    config
+        .and_then(|cfg| cfg.input.as_ref())
+        .and_then(|input| input.claude_roots.as_deref())
+}
+
+fn codex_root_overrides(config: Option<&config::Config>) -> Option<&[String]> {
+    config
+        .and_then(|cfg| cfg.input.as_ref())
+        .and_then(|input| input.codex_roots.as_deref())
+}
+
+fn format_roots_for_display(roots: &[std::path::PathBuf]) -> String {
+    roots
+        .iter()
+        .map(|path| path.display().to_string())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// Collects Claude Code log entries with discovery statistics.
-fn collect_claude_entries_with_stats(today: chrono::NaiveDate) -> (Vec<parser::claude::LogEntry>, DiscoveryStats) {
-    let mut stats = DiscoveryStats { project_count: 0, file_count: 0, total_entries: 0 };
+fn collect_claude_entries_with_stats(
+    today: chrono::NaiveDate,
+    config: Option<&config::Config>,
+) -> (Vec<parser::claude::LogEntry>, DiscoveryStats) {
+    let roots = parser::discover_claude_log_roots(claude_root_overrides(config));
+    let mut stats = DiscoveryStats {
+        project_count: 0,
+        file_count: 0,
+        total_entries: 0,
+        roots: roots.clone(),
+    };
 
-    if parser::discover_log_dir().is_err() {
+    if roots.is_empty() {
         return (Vec::new(), stats);
     }
 
     let mut all_entries = Vec::new();
-    if let Ok(project_dirs) = parser::list_project_dirs() {
-        stats.project_count = project_dirs.len();
-        for project_dir in project_dirs {
-            if let Ok(session_files) = parser::list_session_files(&project_dir) {
-                stats.file_count += session_files.len();
-                for session_file in session_files {
-                    if let Ok(entries) = parser::parse_jsonl_file(&session_file) {
-                        stats.total_entries += entries.len();
-                        let today_entries = parser::filter_entries_by_date(entries, today);
-                        all_entries.extend(today_entries);
+    for root in roots {
+        if let Ok(project_dirs) = parser::list_project_dirs_in_root(&root) {
+            stats.project_count += project_dirs.len();
+            for project_dir in project_dirs {
+                if let Ok(session_files) = parser::list_session_files(&project_dir) {
+                    stats.file_count += session_files.len();
+                    for session_file in session_files {
+                        if let Ok(entries) = parser::parse_jsonl_file(&session_file) {
+                            stats.total_entries += entries.len();
+                            let today_entries = parser::filter_entries_by_date(entries, today);
+                            all_entries.extend(today_entries);
+                        }
                     }
                 }
             }
         }
     }
-    (all_entries, stats)
+    let mut deduped = parser::dedupe_claude_entries(all_entries);
+    deduped.sort_by(|left, right| {
+        match (
+            parser::claude::entry_timestamp(left),
+            parser::claude::entry_timestamp(right),
+        ) {
+            (Some(l), Some(r)) => l.cmp(&r),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    (deduped, stats)
 }
 
 /// Collects Claude Code log entries. Returns empty Vec if the log directory is missing.
-fn collect_claude_entries(today: chrono::NaiveDate) -> Vec<parser::claude::LogEntry> {
-    match parser::discover_log_dir() {
-        Ok(_) => {}
-        Err(_) => return Vec::new(),
-    }
-
-    let mut all_entries = Vec::new();
-    if let Ok(project_dirs) = parser::list_project_dirs() {
-        for project_dir in project_dirs {
-            if let Ok(session_files) = parser::list_session_files(&project_dir) {
-                for session_file in session_files {
-                    if let Ok(entries) = parser::parse_jsonl_file(&session_file) {
-                        let today_entries = parser::filter_entries_by_date(entries, today);
-                        all_entries.extend(today_entries);
-                    }
-                }
-            }
-        }
-    }
-    all_entries
+fn collect_claude_entries(
+    today: chrono::NaiveDate,
+    config: Option<&config::Config>,
+) -> Vec<parser::claude::LogEntry> {
+    collect_claude_entries_with_stats(today, config).0
 }
 
 /// Collects Codex session logs. Returns empty Vec if the sessions directory is missing.
 fn collect_codex_sessions(
     today: chrono::NaiveDate,
-) -> Vec<(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)> {
-    let sessions_dir = match parser::codex::discover_codex_sessions_dir() {
-        Ok(dir) => dir,
-        Err(_) => return Vec::new(),
-    };
+    config: Option<&config::Config>,
+) -> (Vec<CodexCollectedSession>, Vec<std::path::PathBuf>) {
+    #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+    enum SessionMergeKey {
+        SessionId(String),
+        RootAndFile {
+            root: std::path::PathBuf,
+            rollout_filename: String,
+        },
+    }
 
-    // Also scan the previous day's directory to cover UTC/local date boundary.
-    let session_files =
-        match parser::codex::list_session_files_for_local_date(&sessions_dir, today) {
-            Ok(files) => files,
-            Err(_) => return Vec::new(),
+    let roots = parser::codex::discover_codex_session_roots(codex_root_overrides(config));
+    if roots.is_empty() {
+        return (Vec::new(), roots);
+    }
+
+    let mut merged_entries: std::collections::HashMap<
+        SessionMergeKey,
+        Vec<parser::codex::CodexEntry>,
+    > = std::collections::HashMap::new();
+
+    for root in &roots {
+        let Ok(session_files) = parser::codex::list_session_files_for_local_date(root, today)
+        else {
+            continue;
         };
 
-    let mut sessions = Vec::new();
-    for file in session_files {
-        if let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) {
+        for file in session_files {
+            let Ok(entries) = parser::codex::parse_codex_jsonl_file(&file) else {
+                continue;
+            };
             let entries = parser::codex::filter_entries_by_local_date(entries, today);
             let summary = parser::codex::summarize_codex_entries(&entries);
-            // Only include sessions with actual conversation from today
-            if summary.user_count > 0 || summary.assistant_count > 0 {
-                sessions.push((summary, entries));
+            // Keep only sessions with actual conversation on the target date.
+            if summary.user_count == 0 && summary.assistant_count == 0 {
+                continue;
             }
+
+            let merge_key = if !summary.session_id.is_empty() {
+                SessionMergeKey::SessionId(summary.session_id)
+            } else {
+                let rollout_filename = file
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .map(str::to_string)
+                    .unwrap_or_else(|| file.to_string_lossy().to_string());
+                SessionMergeKey::RootAndFile {
+                    root: root.clone(),
+                    rollout_filename,
+                }
+            };
+
+            merged_entries.entry(merge_key).or_default().extend(entries);
         }
     }
-    sessions
+
+    let mut sessions = Vec::new();
+    for mut entries in merged_entries.into_values() {
+        entries = parser::codex::dedupe_entries(entries);
+        parser::codex::sort_entries_by_timestamp(&mut entries);
+        let summary = parser::codex::summarize_codex_entries(&entries);
+        if summary.user_count > 0 || summary.assistant_count > 0 {
+            sessions.push((summary, entries));
+        }
+    }
+
+    sessions.sort_by(|(_, left_entries), (_, right_entries)| {
+        let left_first = left_entries
+            .iter()
+            .filter_map(parser::codex::entry_timestamp)
+            .min();
+        let right_first = right_entries
+            .iter()
+            .filter_map(parser::codex::entry_timestamp)
+            .min();
+        match (left_first, right_first) {
+            (Some(left), Some(right)) => left.cmp(&right),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => std::cmp::Ordering::Equal,
+        }
+    });
+
+    (sessions, roots)
 }
 
 /// Returns the earliest local timestamp from Claude entries.
-fn claude_earliest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::DateTime<chrono::Local>> {
+fn claude_earliest_time(
+    entries: &[parser::claude::LogEntry],
+) -> Option<chrono::DateTime<chrono::Local>> {
     entries
         .iter()
         .filter_map(parser::claude::entry_timestamp)
@@ -735,7 +947,9 @@ fn claude_earliest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::
 }
 
 /// Returns the latest local timestamp from Claude entries.
-fn claude_latest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::DateTime<chrono::Local>> {
+fn claude_latest_time(
+    entries: &[parser::claude::LogEntry],
+) -> Option<chrono::DateTime<chrono::Local>> {
     entries
         .iter()
         .filter_map(parser::claude::entry_timestamp)
@@ -745,7 +959,7 @@ fn claude_latest_time(entries: &[parser::claude::LogEntry]) -> Option<chrono::Da
 
 /// Returns the earliest local timestamp from Codex sessions.
 fn codex_earliest_time(
-    sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+    sessions: &[CodexCollectedSession],
 ) -> Option<chrono::DateTime<chrono::Local>> {
     sessions
         .iter()
@@ -763,7 +977,7 @@ fn codex_earliest_time(
 
 /// Returns the latest local timestamp from Codex sessions.
 fn codex_latest_time(
-    sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+    sessions: &[CodexCollectedSession],
 ) -> Option<chrono::DateTime<chrono::Local>> {
     sessions
         .iter()
@@ -782,9 +996,8 @@ fn codex_latest_time(
 /// Computes total token counts from Claude session summaries: (total_in, total_out).
 fn claude_total_tokens(summaries: &[parser::claude::SessionSummary]) -> (u64, u64) {
     summaries.iter().fold((0, 0), |(acc_in, acc_out), s| {
-        let total_in = s.total_input_tokens
-            + s.total_cache_creation_tokens
-            + s.total_cache_read_tokens;
+        let total_in =
+            s.total_input_tokens + s.total_cache_creation_tokens + s.total_cache_read_tokens;
         (acc_in + total_in, acc_out + s.total_output_tokens)
     })
 }
@@ -833,14 +1046,18 @@ fn save_combined_analysis(
 
     match output::save_to_vault(&vault_path, date, &markdown) {
         Ok(saved) => {
-            println!("\n{}", crate::messages::status::markdown_saved(&saved.display()));
-            if verbose
-                && let Ok(meta) = std::fs::metadata(&saved)
-            {
-                eprintln!("{}", crate::messages::verbose::markdown_file_size(
-                    &saved.display(),
-                    meta.len() as f64 / 1024.0,
-                ));
+            println!(
+                "\n{}",
+                crate::messages::status::markdown_saved(&saved.display())
+            );
+            if verbose && let Ok(meta) = std::fs::metadata(&saved) {
+                eprintln!(
+                    "{}",
+                    crate::messages::verbose::markdown_file_size(
+                        &saved.display(),
+                        meta.len() as f64 / 1024.0,
+                    )
+                );
             }
         }
         Err(e) => eprintln!("{}", crate::messages::error::file_save_failed(&e)),
@@ -853,7 +1070,9 @@ fn print_logo_banner() {
     println!();
     println!("{CYAN}  ██████  ██     ██ ██████{RESET}");
     println!("{CYAN}  ██   ██ ██     ██ ██   ██{RESET}");
-    println!("{CYAN}  ██████  ██  █  ██ ██   ██{RESET}     {DIM}rewind your day  v{version}{RESET}");
+    println!(
+        "{CYAN}  ██████  ██  █  ██ ██   ██{RESET}     {DIM}rewind your day  v{version}{RESET}"
+    );
     println!("{CYAN}  ██   ██ ██ ███ ██ ██   ██{RESET}");
     println!("{CYAN}  ██   ██  ███ ███  ██████{RESET}");
 }
@@ -864,7 +1083,7 @@ fn print_info_box(
     date: chrono::NaiveDate,
     claude_summaries: Option<&[parser::claude::SessionSummary]>,
     claude_entries: &[parser::claude::LogEntry],
-    codex_sessions: &[(parser::codex::CodexSessionSummary, Vec<parser::codex::CodexEntry>)],
+    codex_sessions: &[CodexCollectedSession],
 ) {
     // Build rows as (color_kind, text) pairs. "sep" means separator line.
     let date_str = format!("{date}");
@@ -883,11 +1102,14 @@ fn print_info_box(
         rows.push(("plain", time_range));
 
         let (total_in, total_out) = claude_total_tokens(summaries);
-        rows.push(("plain", crate::messages::display::session_count_with_tokens(
-            summaries.len(),
-            &format_number(total_in),
-            &format_number(total_out),
-        )));
+        rows.push((
+            "plain",
+            crate::messages::display::session_count_with_tokens(
+                summaries.len(),
+                &format_number(total_in),
+                &format_number(total_out),
+            ),
+        ));
     }
 
     // Codex section
@@ -898,13 +1120,17 @@ fn print_info_box(
         let latest = codex_latest_time(codex_sessions);
         let time_range = format_time_range(earliest, latest);
         rows.push(("plain", time_range));
-        rows.push(("plain", crate::messages::display::session_count(codex_sessions.len())));
+        rows.push((
+            "plain",
+            crate::messages::display::session_count(codex_sessions.len()),
+        ));
     } else {
         rows.push(("plain", crate::messages::display::NO_SESSIONS.to_string()));
     }
 
     // Determine box width from the longest content line (CJK chars count as 2).
-    let content_max = rows.iter()
+    let content_max = rows
+        .iter()
         .filter(|(kind, _)| *kind != "sep")
         .map(|(_, text)| unicode_display_width(text))
         .max()
@@ -963,7 +1189,11 @@ fn unicode_display_width(s: &str) -> usize {
 fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
     let term_w = terminal_width();
     let header_used = 5 + unicode_display_width(source_name) + 1;
-    let line_len = if term_w > header_used { term_w - header_used } else { 20 };
+    let line_len = if term_w > header_used {
+        term_w - header_used
+    } else {
+        20
+    };
     let line = "─".repeat(line_len);
     println!("\n{CYAN}  ┌─ {source_name} {line}{RESET}");
 
@@ -975,10 +1205,16 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
             &session.session_id
         };
         println!("\n{BRIGHT_BLUE}  ▸ Session: {id_short}{RESET}");
-        println!("{}", crate::messages::display::summary_line(&session.work_summary));
+        println!(
+            "{}",
+            crate::messages::display::summary_line(&session.work_summary)
+        );
 
         if !session.decisions.is_empty() {
-            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::DECISIONS_LABEL);
+            println!(
+                "\n  {YELLOW}{}{RESET}",
+                crate::messages::display::DECISIONS_LABEL
+            );
             for d in &session.decisions {
                 println!("  • {}", d.what);
                 println!("    {DIM}→ {}{RESET}", d.why);
@@ -986,14 +1222,20 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
         }
 
         if !session.curiosities.is_empty() {
-            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::CURIOSITIES_LABEL);
+            println!(
+                "\n  {YELLOW}{}{RESET}",
+                crate::messages::display::CURIOSITIES_LABEL
+            );
             for c in &session.curiosities {
                 println!("  • {c}");
             }
         }
 
         if !session.corrections.is_empty() {
-            println!("\n  {YELLOW}{}{RESET}", crate::messages::display::CORRECTIONS_LABEL);
+            println!(
+                "\n  {YELLOW}{}{RESET}",
+                crate::messages::display::CORRECTIONS_LABEL
+            );
             for c in &session.corrections {
                 println!("  {RED}\u{2717} {}{RESET}", c.model_said);
                 println!("  {GREEN}\u{2713} {}{RESET}", c.user_corrected);
@@ -1003,4 +1245,134 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
 
     let bottom_line = "─".repeat(if term_w > 2 { term_w - 2 } else { 20 });
     println!("\n{CYAN}  └{bottom_line}{RESET}");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Write;
+
+    fn test_config(
+        codex_roots: Option<Vec<String>>,
+        claude_roots: Option<Vec<String>>,
+    ) -> config::Config {
+        config::Config {
+            llm: config::LlmConfig {
+                provider: "codex".to_string(),
+                api_key: String::new(),
+                codex_model: None,
+                codex_reasoning_effort: None,
+            },
+            output: config::OutputConfig {
+                path: "/tmp".to_string(),
+            },
+            redactor: None,
+            lang: Some(config::Lang::En),
+            input: Some(config::InputConfig {
+                codex_roots,
+                claude_roots,
+            }),
+        }
+    }
+
+    fn unique_temp_dir(prefix: &str) -> std::path::PathBuf {
+        std::env::temp_dir().join(format!(
+            "{prefix}_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ))
+    }
+
+    #[test]
+    fn test_collect_claude_entries_dedupes_across_roots() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 11).expect("date");
+        let base = unique_temp_dir("rwd_test_claude_multi_root");
+        let root_a = base.join("claude-a");
+        let root_b = base.join("claude-b");
+        let project_a = root_a.join("project-a");
+        let project_b = root_b.join("project-b");
+        std::fs::create_dir_all(&project_a).expect("project a");
+        std::fs::create_dir_all(&project_b).expect("project b");
+
+        let line = r#"{"type":"user","sessionId":"claude-session-1","timestamp":"2026-04-11T12:00:00Z","uuid":"same-entry"}"#;
+        let file_a = project_a.join("session-a.jsonl");
+        let file_b = project_b.join("session-b.jsonl");
+        std::fs::write(&file_a, format!("{line}\n")).expect("write a");
+        std::fs::write(&file_b, format!("{line}\n")).expect("write b");
+
+        let cfg = test_config(
+            None,
+            Some(vec![
+                root_a.to_string_lossy().to_string(),
+                root_b.to_string_lossy().to_string(),
+            ]),
+        );
+        let (entries, stats) = collect_claude_entries_with_stats(date, Some(&cfg));
+
+        assert!(stats.roots.starts_with(&[root_a.clone(), root_b.clone()]));
+        assert_eq!(entries.len(), 1);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_collect_codex_sessions_merges_by_session_id_across_roots() {
+        let date = chrono::NaiveDate::from_ymd_opt(2099, 1, 1).expect("date");
+        let base = unique_temp_dir("rwd_test_codex_multi_root");
+        let root_a = base.join("codex-a");
+        let root_b = base.join("codex-b");
+        let day_dir_a = root_a.join("2099").join("01").join("01");
+        let day_dir_b = root_b.join("2099").join("01").join("01");
+        std::fs::create_dir_all(&day_dir_a).expect("day a");
+        std::fs::create_dir_all(&day_dir_b).expect("day b");
+
+        let mut file_a = std::fs::File::create(day_dir_a.join("rollout-a.jsonl")).expect("file a");
+        writeln!(
+            file_a,
+            r#"{{"timestamp":"2099-01-01T12:00:00Z","type":"session_meta","payload":{{"id":"codex-s1","cwd":"/p","model_provider":"openai"}}}}"#
+        )
+        .expect("meta a");
+        writeln!(
+            file_a,
+            r#"{{"timestamp":"2099-01-01T12:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello"}}}}"#
+        )
+        .expect("user a");
+
+        let mut file_b = std::fs::File::create(day_dir_b.join("rollout-b.jsonl")).expect("file b");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:00:00Z","type":"session_meta","payload":{{"id":"codex-s1","cwd":"/p","model_provider":"openai"}}}}"#
+        )
+        .expect("meta b");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello"}}}}"#
+        )
+        .expect("user duplicate");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:02:00Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"done"}}]}}}}"#
+        )
+        .expect("assistant b");
+
+        let cfg = test_config(
+            Some(vec![
+                root_a.to_string_lossy().to_string(),
+                root_b.to_string_lossy().to_string(),
+            ]),
+            None,
+        );
+        let (sessions, roots) = collect_codex_sessions(date, Some(&cfg));
+
+        assert!(roots.starts_with(&[root_a.clone(), root_b.clone()]));
+        assert_eq!(sessions.len(), 1);
+        let (summary, _) = &sessions[0];
+        assert_eq!(summary.session_id, "codex-s1");
+        assert_eq!(summary.user_count, 1);
+        assert_eq!(summary.assistant_count, 1);
+
+        std::fs::remove_dir_all(&base).ok();
+    }
 }

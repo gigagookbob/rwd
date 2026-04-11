@@ -189,6 +189,7 @@ pub mod error {
 /// Status and progress messages.
 pub mod status {
     pub const CACHE_USED: &str = "Using cached analysis. (no entry changes)";
+    pub const CACHE_BYPASSED: &str = "Ignoring cache. (--no-cache)";
     pub const REWIND_DONE: &str = "Today's daily rewind is ready!";
     pub const SUMMARY_GENERATING: &str = "Generating development progress summary...";
     pub const SUMMARY_HEADER: &str = "=== Development Progress ===";
@@ -435,6 +436,10 @@ pub mod verbose {
         format!(
             "[discover] {projects} projects, {files} log files scanned \u{2192} {today} entries today (of {total} total)"
         )
+    }
+
+    pub fn used_roots(source: &str, roots: &str) -> String {
+        format!("[discover] {source} roots: {roots}")
     }
 
     pub fn step_done_detail(
