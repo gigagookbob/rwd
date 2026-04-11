@@ -25,7 +25,10 @@ Examples:
   rwd config provider codex         Switch LLM provider
   rwd config codex-model gpt-5.4    Set Codex model
   rwd config codex-reasoning xhigh  Set Codex reasoning effort
-  rwd config api-key                Change API key
+  rwd config api-key sk-...         Set API key for current provider
+  rwd config openai-api-key sk-...  Set OpenAI API key
+  rwd config anthropic-api-key ...  Set Anthropic API key
+  rwd auth status                   Show provider auth status
   rwd update                        Update to the latest version"
 )]
 pub struct Cli {
@@ -97,14 +100,31 @@ Examples:
   rwd config                        Interactive settings menu
   rwd config output-path ~/vault    Set Obsidian vault path
   rwd config provider codex         Switch LLM provider
+  rwd config api-key sk-...         Set API key for current provider (openai/anthropic)
+  rwd config openai-api-key sk-...  Set OpenAI API key
+  rwd config anthropic-api-key ...  Set Anthropic API key
   rwd config codex-model gpt-5.4    Set Codex model
   rwd config codex-reasoning xhigh  Set Codex reasoning effort")]
     Config {
-        /// Config key (output-path, provider, api-key, codex-model, codex-reasoning)
+        /// Config key (output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning)
         key: Option<String>,
         /// Value to set
         value: Option<String>,
     },
     /// Update to the latest version via GitHub Releases
     Update,
+    /// Show authentication status for current provider
+    #[command(after_help = "\
+Example:
+  rwd auth status  Show provider auth method and credential state")]
+    Auth {
+        #[command(subcommand)]
+        action: AuthAction,
+    },
+}
+
+#[derive(Subcommand)]
+pub enum AuthAction {
+    /// Show provider auth method and credential state
+    Status,
 }

@@ -218,8 +218,8 @@ impl LlmProvider {
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
     let config = crate::config::load_config_if_exists().ok_or(crate::messages::error::NO_CONFIG)?;
 
-    let provider = match config.llm.provider.as_str() {
-        "openai" => LlmProvider::OpenAi,
+    let (provider, api_key) = match config.llm.provider.as_str() {
+        "openai" => (LlmProvider::OpenAi, config.llm.openai_api_key.clone()),
         "codex" => {
             let model = config
                 .llm
@@ -233,12 +233,15 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
                 .as_deref()
                 .unwrap_or(crate::config::DEFAULT_CODEX_REASONING_EFFORT)
                 .to_string();
-            LlmProvider::Codex {
-                model,
-                reasoning_effort,
-            }
+            (
+                LlmProvider::Codex {
+                    model,
+                    reasoning_effort,
+                },
+                String::new(),
+            )
         }
-        _ => LlmProvider::Anthropic,
+        _ => (LlmProvider::Anthropic, config.llm.anthropic_api_key.clone()),
     };
-    Ok((provider, config.llm.api_key))
+    Ok((provider, api_key))
 }

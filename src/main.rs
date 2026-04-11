@@ -9,7 +9,7 @@ mod redactor;
 mod update;
 
 use clap::Parser;
-use cli::Commands;
+use cli::{AuthAction, Commands};
 
 // ANSI color codes — visible on both light and dark terminals.
 const CYAN: &str = "\x1b[36m";
@@ -102,6 +102,14 @@ async fn main() {
                 std::process::exit(1);
             }
         }
+        Commands::Auth { action } => match action {
+            AuthAction::Status => {
+                if let Err(e) = config::run_auth_status().await {
+                    eprintln!("{}", crate::messages::error::config_failed(&e));
+                    std::process::exit(1);
+                }
+            }
+        },
         Commands::Summary {
             lang,
             date,
@@ -1259,7 +1267,9 @@ mod tests {
         config::Config {
             llm: config::LlmConfig {
                 provider: "codex".to_string(),
-                api_key: String::new(),
+                openai_api_key: String::new(),
+                anthropic_api_key: String::new(),
+                legacy_api_key: String::new(),
                 codex_model: None,
                 codex_reasoning_effort: None,
             },
@@ -1287,7 +1297,8 @@ mod tests {
 
     #[test]
     fn test_collect_claude_entries_dedupes_across_roots() {
-        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 11).expect("date");
+        // Use a far-future date to avoid collisions with real local logs.
+        let date = chrono::NaiveDate::from_ymd_opt(2099, 1, 1).expect("date");
         let base = unique_temp_dir("rwd_test_claude_multi_root");
         let root_a = base.join("claude-a");
         let root_b = base.join("claude-b");
@@ -1296,7 +1307,7 @@ mod tests {
         std::fs::create_dir_all(&project_a).expect("project a");
         std::fs::create_dir_all(&project_b).expect("project b");
 
-        let line = r#"{"type":"user","sessionId":"claude-session-1","timestamp":"2026-04-11T12:00:00Z","uuid":"same-entry"}"#;
+        let line = r#"{"type":"user","sessionId":"claude-session-1","timestamp":"2099-01-01T12:00:00Z","uuid":"same-entry"}"#;
         let file_a = project_a.join("session-a.jsonl");
         let file_b = project_b.join("session-b.jsonl");
         std::fs::write(&file_a, format!("{line}\n")).expect("write a");
@@ -1312,7 +1323,17 @@ mod tests {
         let (entries, stats) = collect_claude_entries_with_stats(date, Some(&cfg));
 
         assert!(stats.roots.starts_with(&[root_a.clone(), root_b.clone()]));
-        assert_eq!(entries.len(), 1);
+        let matching_count = entries
+            .iter()
+            .filter(|entry| {
+                matches!(
+                    entry,
+                    parser::claude::LogEntry::User(u)
+                        if u.session_id == "claude-session-1" && u.uuid == "same-entry"
+                )
+            })
+            .count();
+        assert_eq!(matching_count, 1);
 
         std::fs::remove_dir_all(&base).ok();
     }

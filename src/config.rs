@@ -51,11 +51,88 @@ impl Config {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct LlmConfig {
     pub provider: String,
-    pub api_key: String,
+    #[serde(default)]
+    pub openai_api_key: String,
+    #[serde(default)]
+    pub anthropic_api_key: String,
+    /// Legacy single API key field (`api_key`) kept only for migration.
+    #[serde(default, rename = "api_key", skip_serializing)]
+    pub legacy_api_key: String,
     #[serde(default)]
     pub codex_model: Option<String>,
     #[serde(default)]
     pub codex_reasoning_effort: Option<String>,
+}
+
+impl LlmConfig {
+    /// Returns API key for the given provider.
+    fn api_key_for_provider(&self, provider: &str) -> &str {
+        match provider {
+            "openai" => &self.openai_api_key,
+            "anthropic" => &self.anthropic_api_key,
+            _ => "",
+        }
+    }
+
+    /// Sets API key for the given provider.
+    fn set_api_key_for_provider(&mut self, provider: &str, api_key: String) {
+        match provider {
+            "openai" => self.openai_api_key = api_key,
+            "anthropic" => self.anthropic_api_key = api_key,
+            _ => {}
+        }
+    }
+
+    /// Migrates legacy `api_key` into provider-specific key fields.
+    /// Returns true when migration changed in-memory values.
+    fn migrate_legacy_api_key(&mut self) -> bool {
+        let legacy = self.legacy_api_key.trim();
+        if legacy.is_empty() {
+            return false;
+        }
+
+        let mut changed = false;
+
+        // Infer provider from known key prefix first.
+        if legacy.starts_with("sk-ant-") {
+            if self.anthropic_api_key.is_empty() {
+                self.anthropic_api_key = legacy.to_string();
+                changed = true;
+            }
+        } else if legacy.starts_with("sk-") {
+            if self.openai_api_key.is_empty() {
+                self.openai_api_key = legacy.to_string();
+                changed = true;
+            }
+        } else {
+            match self.provider.as_str() {
+                "openai" => {
+                    if self.openai_api_key.is_empty() {
+                        self.openai_api_key = legacy.to_string();
+                        changed = true;
+                    }
+                }
+                "anthropic" => {
+                    if self.anthropic_api_key.is_empty() {
+                        self.anthropic_api_key = legacy.to_string();
+                        changed = true;
+                    }
+                }
+                _ => {
+                    if self.openai_api_key.is_empty() {
+                        self.openai_api_key = legacy.to_string();
+                        changed = true;
+                    }
+                }
+            }
+        }
+
+        if changed {
+            self.legacy_api_key.clear();
+        }
+
+        changed
+    }
 }
 
 /// Markdown output settings.
@@ -107,7 +184,11 @@ pub fn save_config(config: &Config, path: &std::path::Path) -> Result<(), Config
 /// Loads config from a TOML file.
 pub fn load_config(path: &std::path::Path) -> Result<Config, ConfigError> {
     let content = std::fs::read_to_string(path)?;
-    let config: Config = toml::from_str(&content)?;
+    let mut config: Config = toml::from_str(&content)?;
+    if config.llm.migrate_legacy_api_key() {
+        // Best-effort in-place migration to persist new key layout and drop legacy field.
+        let _ = save_config(&config, path);
+    }
     Ok(config)
 }
 
@@ -141,7 +222,7 @@ pub fn run_init() -> Result<(), ConfigError> {
     }
 
     // API key input (masked). Codex uses `codex login` auth (no API key).
-    let api_key = match provider {
+    let entered_api_key = match provider {
         "codex" => {
             eprintln!("{}", crate::messages::init::CODEX_LOGIN_AUTH);
             String::new()
@@ -159,14 +240,14 @@ pub fn run_init() -> Result<(), ConfigError> {
         _ => unreachable!(),
     };
 
-    if provider != "codex" && api_key.is_empty() {
+    if provider != "codex" && entered_api_key.is_empty() {
         return Err(crate::messages::init::API_KEY_EMPTY.into());
     }
 
     if provider != "codex" {
         // Show masked key (first 8 chars + ***)
-        let masked = if api_key.len() > 8 {
-            format!("{}***", &api_key[..8])
+        let masked = if entered_api_key.len() > 8 {
+            format!("{}***", &entered_api_key[..8])
         } else {
             "***".to_string()
         };
@@ -204,7 +285,17 @@ pub fn run_init() -> Result<(), ConfigError> {
     let config = Config {
         llm: LlmConfig {
             provider: provider.to_string(),
-            api_key,
+            openai_api_key: if provider == "openai" {
+                entered_api_key.clone()
+            } else {
+                String::new()
+            },
+            anthropic_api_key: if provider == "anthropic" {
+                entered_api_key
+            } else {
+                String::new()
+            },
+            legacy_api_key: String::new(),
             codex_model: None,
             codex_reasoning_effort: None,
         },
@@ -233,6 +324,7 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
     }
 
     let mut config = load_config(&config_file)?;
+    let old_provider = config.llm.provider.clone();
 
     match key {
         "output-path" => {
@@ -244,13 +336,43 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
                 return Err(crate::messages::config::unsupported_provider(value).into());
             }
             config.llm.provider = value.to_string();
-            eprintln!("{}", crate::messages::config::provider_changed(value));
+            eprintln!(
+                "{}",
+                crate::messages::config::provider_changed(value, provider_auth_method(value))
+            );
+            print_provider_switch_guidance(&old_provider, value, &config.llm);
         }
         "api-key" => {
-            config.llm.api_key = value.to_string();
+            if !provider_uses_api_key(&config.llm.provider) {
+                return Err(crate::messages::config::api_key_unused_for_provider(
+                    &config.llm.provider,
+                )
+                .into());
+            }
+            let provider = config.llm.provider.clone();
+            config
+                .llm
+                .set_api_key_for_provider(&provider, value.to_string());
             eprintln!(
                 "{}",
                 crate::messages::config::api_key_changed(&mask_api_key(value))
+            );
+        }
+        "openai-api-key" => {
+            config.llm.openai_api_key = value.to_string();
+            eprintln!(
+                "{}",
+                crate::messages::config::provider_api_key_changed("OpenAI", &mask_api_key(value))
+            );
+        }
+        "anthropic-api-key" => {
+            config.llm.anthropic_api_key = value.to_string();
+            eprintln!(
+                "{}",
+                crate::messages::config::provider_api_key_changed(
+                    "Anthropic",
+                    &mask_api_key(value),
+                )
             );
         }
         "codex-model" => {
@@ -324,6 +446,169 @@ fn parse_reasoning_effort(value: &str) -> Result<Option<String>, ConfigError> {
     } else {
         Err(crate::messages::config::unsupported_reasoning_effort(trimmed).into())
     }
+}
+
+fn provider_auth_method(provider: &str) -> &'static str {
+    match provider {
+        "codex" => "Codex login session",
+        "anthropic" | "openai" => "API key",
+        _ => "API key",
+    }
+}
+
+fn provider_uses_api_key(provider: &str) -> bool {
+    matches!(provider, "anthropic" | "openai")
+}
+
+fn has_stored_api_key(api_key: &str) -> bool {
+    !api_key.trim().is_empty()
+}
+
+fn provider_api_key<'a>(llm: &'a LlmConfig, provider: &str) -> &'a str {
+    llm.api_key_for_provider(provider)
+}
+
+fn print_provider_switch_guidance(old_provider: &str, new_provider: &str, llm: &LlmConfig) {
+    if old_provider == new_provider {
+        return;
+    }
+
+    if new_provider == "codex" {
+        let openai_state = if has_stored_api_key(&llm.openai_api_key) {
+            "set"
+        } else {
+            "not set"
+        };
+        let anthropic_state = if has_stored_api_key(&llm.anthropic_api_key) {
+            "set"
+        } else {
+            "not set"
+        };
+        eprintln!(
+            "{}",
+            crate::messages::config::switched_to_codex_keeps_api_key(&format!(
+                "openai: {openai_state}, anthropic: {anthropic_state}"
+            ))
+        );
+    } else if provider_uses_api_key(new_provider)
+        && !has_stored_api_key(provider_api_key(llm, new_provider))
+    {
+        eprintln!(
+            "{}",
+            crate::messages::config::provider_requires_api_key(new_provider)
+        );
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum CodexLoginState {
+    Verified,
+    NotLoggedIn,
+    CheckFailed,
+}
+
+fn infer_codex_login_state(success: bool, stdout: &str, stderr: &str) -> CodexLoginState {
+    if !success {
+        return CodexLoginState::NotLoggedIn;
+    }
+
+    // Some Codex builds print login status to stderr instead of stdout.
+    let merged = format!("{stdout}\n{stderr}").to_ascii_lowercase();
+    if merged.contains("not logged in") || merged.contains("not authenticated") {
+        CodexLoginState::NotLoggedIn
+    } else if merged.contains("logged in") {
+        CodexLoginState::Verified
+    } else {
+        CodexLoginState::NotLoggedIn
+    }
+}
+
+async fn codex_login_state() -> CodexLoginState {
+    let status_output = tokio::task::spawn_blocking(|| {
+        std::process::Command::new("codex")
+            .args(["login", "status"])
+            .output()
+    })
+    .await;
+
+    match status_output {
+        Ok(Ok(output)) => infer_codex_login_state(
+            output.status.success(),
+            &String::from_utf8_lossy(&output.stdout),
+            &String::from_utf8_lossy(&output.stderr),
+        ),
+        _ => CodexLoginState::CheckFailed,
+    }
+}
+
+pub async fn run_auth_status() -> Result<(), ConfigError> {
+    let config_file = config_path()?;
+
+    if !config_file.exists() {
+        return Err(crate::messages::config::NO_CONFIG.into());
+    }
+
+    let config = load_config(&config_file)?;
+    let provider = config.llm.provider.as_str();
+    let openai_has_key = has_stored_api_key(&config.llm.openai_api_key);
+    let anthropic_has_key = has_stored_api_key(&config.llm.anthropic_api_key);
+
+    println!("{}", crate::messages::auth::provider(provider));
+    println!(
+        "{}",
+        crate::messages::auth::auth_method(provider_auth_method(provider))
+    );
+
+    let openai_detail = if provider == "openai" {
+        "active"
+    } else {
+        "inactive"
+    };
+    let anthropic_detail = if provider == "anthropic" {
+        "active"
+    } else {
+        "inactive"
+    };
+    println!(
+        "{}",
+        crate::messages::auth::provider_api_key(
+            "OpenAI",
+            if openai_has_key { "set" } else { "not set" },
+            openai_detail,
+        )
+    );
+    println!(
+        "{}",
+        crate::messages::auth::provider_api_key(
+            "Anthropic",
+            if anthropic_has_key { "set" } else { "not set" },
+            anthropic_detail,
+        )
+    );
+
+    if provider == "codex" {
+        let state = match codex_login_state().await {
+            CodexLoginState::Verified => "verified",
+            CodexLoginState::NotLoggedIn => "not logged in",
+            CodexLoginState::CheckFailed => "check failed",
+        };
+        println!("{}", crate::messages::auth::codex_login_status(state));
+    } else {
+        let has_active_key = has_stored_api_key(provider_api_key(&config.llm, provider));
+        if !has_active_key {
+            let hint = if provider == "openai" {
+                "set with `rwd config api-key <key>` or `rwd config openai-api-key <key>`"
+            } else {
+                "set with `rwd config api-key <key>` or `rwd config anthropic-api-key <key>`"
+            };
+            println!(
+                "{}",
+                crate::messages::auth::provider_missing_api_key(provider, hint)
+            );
+        }
+    }
+
+    Ok(())
 }
 
 /// Reads a password with Esc support. Esc returns None (cancel), Enter returns the input.
@@ -408,29 +693,20 @@ async fn verify_api_key(provider: &str, api_key: &str) {
             "{dim}{}{reset}",
             crate::messages::verify::VERIFYING_CODEX_LOGIN
         );
-        let status_output = tokio::task::spawn_blocking(|| {
-            std::process::Command::new("codex")
-                .args(["login", "status"])
-                .output()
-        })
-        .await;
-
-        match status_output {
-            Ok(Ok(output)) => {
-                let stdout = String::from_utf8_lossy(&output.stdout);
-                if output.status.success() && stdout.trim_start().starts_with("Logged in") {
-                    eprintln!(
-                        "\r{green}{}{reset}                    ",
-                        crate::messages::verify::CODEX_LOGIN_VERIFIED
-                    );
-                } else {
-                    eprintln!(
-                        "\r{yellow}{}{reset}",
-                        crate::messages::verify::CODEX_NOT_LOGGED_IN
-                    );
-                }
+        match codex_login_state().await {
+            CodexLoginState::Verified => {
+                eprintln!(
+                    "\r{green}{}{reset}                    ",
+                    crate::messages::verify::CODEX_LOGIN_VERIFIED
+                );
             }
-            _ => {
+            CodexLoginState::NotLoggedIn => {
+                eprintln!(
+                    "\r{yellow}{}{reset}",
+                    crate::messages::verify::CODEX_NOT_LOGGED_IN
+                );
+            }
+            CodexLoginState::CheckFailed => {
                 eprintln!(
                     "\r{dim}{}{reset}",
                     crate::messages::verify::CODEX_LOGIN_CHECK_FAILED
@@ -500,7 +776,9 @@ async fn verify_api_key(provider: &str, api_key: &str) {
 
 /// Masks an API key for display.
 fn mask_api_key(key: &str) -> String {
-    if key.len() > 8 {
+    if key.trim().is_empty() {
+        "not set".to_string()
+    } else if key.len() > 8 {
         format!("{}***", &key[..8])
     } else if key.len() > 4 {
         format!("{}***", &key[..4])
@@ -542,6 +820,12 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             .codex_reasoning_effort
             .as_deref()
             .unwrap_or(DEFAULT_CODEX_REASONING_EFFORT);
+        let current_provider_key = provider_api_key(&config.llm, &config.llm.provider);
+        let api_key_display = if provider_uses_api_key(&config.llm.provider) {
+            mask_api_key(current_provider_key)
+        } else {
+            "unused (codex login)".to_string()
+        };
         let items = vec![
             format!(
                 "{cyan}provider{reset}      {dim}[{}]{reset}",
@@ -549,7 +833,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             ),
             format!(
                 "{cyan}api-key{reset}       {dim}[{}]{reset}",
-                mask_api_key(&config.llm.api_key)
+                api_key_display
             ),
             format!("{cyan}codex-model{reset}   {dim}[{codex_model}]{reset}"),
             format!("{cyan}codex-reasoning{reset} {dim}[{codex_reasoning}]{reset}"),
@@ -608,7 +892,19 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                         "{green}{}{reset}",
                         crate::messages::config::changed(&old, new_provider)
                     );
-                    verify_api_key(&config.llm.provider, &config.llm.api_key).await;
+                    eprintln!(
+                        "{dim}{}{reset}",
+                        crate::messages::config::provider_now_uses(
+                            new_provider,
+                            provider_auth_method(new_provider),
+                        )
+                    );
+                    print_provider_switch_guidance(&old, new_provider, &config.llm);
+                    verify_api_key(
+                        &config.llm.provider,
+                        provider_api_key(&config.llm, &config.llm.provider),
+                    )
+                    .await;
                     eprintln!();
                 }
             }
@@ -636,17 +932,22 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 if confirmed != Some(true) {
                     continue;
                 }
-                let old_masked = mask_api_key(&config.llm.api_key);
-                config.llm.api_key = new_key;
+                let old_masked = mask_api_key(provider_api_key(&config.llm, &config.llm.provider));
+                let provider = config.llm.provider.clone();
+                config.llm.set_api_key_for_provider(&provider, new_key);
                 save_config(&config, &config_file)?;
                 eprintln!(
                     "{green}{}{reset}",
                     crate::messages::config::changed(
                         &old_masked,
-                        &mask_api_key(&config.llm.api_key)
+                        &mask_api_key(provider_api_key(&config.llm, &config.llm.provider))
                     )
                 );
-                verify_api_key(&config.llm.provider, &config.llm.api_key).await;
+                verify_api_key(
+                    &config.llm.provider,
+                    provider_api_key(&config.llm, &config.llm.provider),
+                )
+                .await;
                 eprintln!();
             }
             // codex-model
@@ -993,7 +1294,9 @@ mod tests {
         let config = Config {
             llm: LlmConfig {
                 provider: "anthropic".to_string(),
-                api_key: "sk-test-key".to_string(),
+                openai_api_key: String::new(),
+                anthropic_api_key: "sk-test-key".to_string(),
+                legacy_api_key: String::new(),
                 codex_model: None,
                 codex_reasoning_effort: None,
             },
@@ -1009,7 +1312,8 @@ mod tests {
         let loaded = load_config(&path).expect("load");
 
         assert_eq!(loaded.llm.provider, "anthropic");
-        assert_eq!(loaded.llm.api_key, "sk-test-key");
+        assert_eq!(loaded.llm.openai_api_key, "");
+        assert_eq!(loaded.llm.anthropic_api_key, "sk-test-key");
         assert_eq!(loaded.llm.codex_model, None);
         assert_eq!(loaded.llm.codex_reasoning_effort, None);
         assert_eq!(loaded.output.path, "/tmp/vault");
@@ -1050,7 +1354,7 @@ mod tests {
         let toml_str = r#"
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1064,7 +1368,7 @@ path = "/tmp/vault"
         let toml_str = r#"
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1081,7 +1385,7 @@ enabled = false
         let toml_str = r#"
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1098,7 +1402,7 @@ lang = "ko"
 
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1114,7 +1418,7 @@ lang = "en"
 
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1128,7 +1432,7 @@ path = "/tmp/vault"
         let toml_str = r#"
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1142,7 +1446,7 @@ path = "/tmp/vault"
         let toml_str = r#"
 [llm]
 provider = "anthropic"
-api_key = "sk-test"
+anthropic_api_key = "sk-test"
 
 [output]
 path = "/tmp/vault"
@@ -1177,7 +1481,9 @@ claude_roots = ["/home/jinwoo/.claude/projects"]
         let config = Config {
             llm: LlmConfig {
                 provider: "anthropic".to_string(),
-                api_key: "sk-test".to_string(),
+                openai_api_key: String::new(),
+                anthropic_api_key: "sk-test".to_string(),
+                legacy_api_key: String::new(),
                 codex_model: None,
                 codex_reasoning_effort: None,
             },
@@ -1233,7 +1539,8 @@ claude_roots = ["/home/jinwoo/.claude/projects"]
         let toml_str = r#"
 [llm]
 provider = "codex"
-api_key = ""
+openai_api_key = ""
+anthropic_api_key = ""
 codex_model = "gpt-5.4"
 codex_reasoning_effort = "xhigh"
 
@@ -1244,6 +1551,58 @@ path = "/tmp/vault"
         assert_eq!(config.llm.provider, "codex");
         assert_eq!(config.llm.codex_model.as_deref(), Some("gpt-5.4"));
         assert_eq!(config.llm.codex_reasoning_effort.as_deref(), Some("xhigh"));
+    }
+
+    #[test]
+    fn test_load_config_migrates_legacy_openai_api_key() {
+        let temp_dir = std::env::temp_dir().join("rwd_test_legacy_key_openai");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create dir");
+        let path = temp_dir.join("config.toml");
+
+        let legacy_toml = r#"
+[llm]
+provider = "openai"
+api_key = "sk-openai-legacy"
+
+[output]
+path = "/tmp/vault"
+"#;
+        std::fs::write(&path, legacy_toml).expect("write legacy config");
+
+        let loaded = load_config(&path).expect("load config");
+        assert_eq!(loaded.llm.openai_api_key, "sk-openai-legacy");
+        assert_eq!(loaded.llm.anthropic_api_key, "");
+
+        let migrated = std::fs::read_to_string(&path).expect("read migrated config");
+        assert!(migrated.contains("openai_api_key = \"sk-openai-legacy\""));
+        assert!(!migrated.contains("\napi_key ="));
+
+        std::fs::remove_dir_all(&temp_dir).ok();
+    }
+
+    #[test]
+    fn test_load_config_migrates_legacy_anthropic_key_by_prefix() {
+        let temp_dir = std::env::temp_dir().join("rwd_test_legacy_key_anthropic");
+        let _ = std::fs::remove_dir_all(&temp_dir);
+        std::fs::create_dir_all(&temp_dir).expect("create dir");
+        let path = temp_dir.join("config.toml");
+
+        let legacy_toml = r#"
+[llm]
+provider = "codex"
+api_key = "sk-ant-legacy"
+
+[output]
+path = "/tmp/vault"
+"#;
+        std::fs::write(&path, legacy_toml).expect("write legacy config");
+
+        let loaded = load_config(&path).expect("load config");
+        assert_eq!(loaded.llm.openai_api_key, "");
+        assert_eq!(loaded.llm.anthropic_api_key, "sk-ant-legacy");
+
+        std::fs::remove_dir_all(&temp_dir).ok();
     }
 
     #[test]
@@ -1259,5 +1618,38 @@ path = "/tmp/vault"
     #[test]
     fn test_windows_path_to_wsl_rejects_non_windows_path() {
         assert!(windows_path_to_wsl("/home/alice/vault").is_none());
+    }
+
+    #[test]
+    fn test_provider_auth_method_and_usage_flags() {
+        assert_eq!(provider_auth_method("codex"), "Codex login session");
+        assert_eq!(provider_auth_method("openai"), "API key");
+        assert_eq!(provider_auth_method("anthropic"), "API key");
+        assert!(provider_uses_api_key("openai"));
+        assert!(provider_uses_api_key("anthropic"));
+        assert!(!provider_uses_api_key("codex"));
+    }
+
+    #[test]
+    fn test_has_stored_api_key_trims_whitespace() {
+        assert!(has_stored_api_key("sk-test-key"));
+        assert!(!has_stored_api_key(""));
+        assert!(!has_stored_api_key("   "));
+    }
+
+    #[test]
+    fn test_infer_codex_login_state_reads_stderr_logged_in() {
+        assert_eq!(
+            infer_codex_login_state(true, "", "Logged in using ChatGPT"),
+            CodexLoginState::Verified
+        );
+    }
+
+    #[test]
+    fn test_infer_codex_login_state_not_logged_in_phrase_wins() {
+        assert_eq!(
+            infer_codex_login_state(true, "Logged in", "Not logged in"),
+            CodexLoginState::NotLoggedIn
+        );
     }
 }
