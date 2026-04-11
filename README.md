@@ -98,6 +98,8 @@ rwd update             # Update to the latest version
 - Release tag is derived from `Cargo.toml` package version (`vX.Y.Z`).
 - If the tag already exists, release is skipped.
 - Docs-only changes (for example `README.md`, `docs/**`) do not trigger release.
+- Release notes are published in two layers: a short custom summary for `rwd`, then GitHub's full categorized changelog.
+- Maintainer tone and workflow guide: [docs/RELEASES.md](docs/RELEASES.md)
 
 ## Uninstall
 

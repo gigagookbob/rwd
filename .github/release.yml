@@ -1,6 +1,9 @@
 changelog:
+  exclude:
+    labels:
+      - "skip-release-notes"
   categories:
-    - title: "Features"
+    - title: "New Features"
       labels: ["enhancement"]
     - title: "Bug Fixes"
       labels: ["bug"]
