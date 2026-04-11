@@ -4,8 +4,9 @@
 
 use serde::Deserialize;
 use std::io::Write;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use super::{AnalyzerError, ApiUsage};
 
@@ -18,7 +19,16 @@ pub async fn call_codex_json_api(
     reasoning_effort: &str,
 ) -> Result<(String, ApiUsage), AnalyzerError> {
     let prompt = compose_prompt(system_prompt, conversation_text);
-    run_codex_exec(&prompt, None, max_tokens, model, reasoning_effort)
+    let schema_path = write_analysis_schema_file()?;
+    let result = run_codex_exec(
+        &prompt,
+        Some(schema_path.as_path()),
+        max_tokens,
+        model,
+        reasoning_effort,
+    );
+    let _ = std::fs::remove_file(schema_path);
+    result
 }
 
 /// Calls Codex for plain-text output (summary/slack/chunk summarize).
@@ -36,6 +46,77 @@ pub async fn call_codex_text_api(
 fn compose_prompt(system_prompt: &str, conversation_text: &str) -> String {
     format!("[System Instructions]\n{system_prompt}\n\n[Conversation]\n{conversation_text}")
 }
+
+/// Writes JSON schema for analysis output to a temporary file.
+/// Codex reads schemas from file paths (`--output-schema`), so we create one per request.
+fn write_analysis_schema_file() -> Result<PathBuf, AnalyzerError> {
+    let now_nanos = SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos();
+    let path = std::env::temp_dir().join(format!(
+        "rwd-analysis-schema-{}-{now_nanos}.json",
+        std::process::id()
+    ));
+    std::fs::write(&path, ANALYSIS_OUTPUT_SCHEMA)?;
+    Ok(path)
+}
+
+/// Structured output schema for insight extraction.
+const ANALYSIS_OUTPUT_SCHEMA: &str = r#"{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["sessions"],
+  "properties": {
+    "sessions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["session_id", "work_summary", "decisions", "curiosities", "corrections", "til"],
+        "properties": {
+          "session_id": { "type": "string" },
+          "work_summary": { "type": "string" },
+          "decisions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["what", "why"],
+              "properties": {
+                "what": { "type": "string" },
+                "why": { "type": "string" }
+              }
+            }
+          },
+          "curiosities": { "type": "array", "items": { "type": "string" } },
+          "corrections": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["model_said", "user_corrected"],
+              "properties": {
+                "model_said": { "type": "string" },
+                "user_corrected": { "type": "string" }
+              }
+            }
+          },
+          "til": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["title", "detail"],
+              "properties": {
+                "title": { "type": "string" },
+                "detail": { "type": "string" }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}"#;
 
 fn run_codex_exec(
     prompt: &str,
@@ -223,5 +304,13 @@ mod tests {
         let output = r#"{"type":"turn.completed","usage":{"input_tokens":1,"output_tokens":2}}"#;
         let result = parse_jsonl_events(output);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_write_analysis_schema_file_creates_schema_with_sessions_key() {
+        let path = write_analysis_schema_file().expect("schema file should be created");
+        let content = std::fs::read_to_string(&path).expect("schema file should be readable");
+        assert!(content.contains("\"sessions\""));
+        let _ = std::fs::remove_file(path);
     }
 }
