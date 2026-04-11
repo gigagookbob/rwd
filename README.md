@@ -60,15 +60,22 @@ If you choose `codex`, `rwd` uses your existing `codex login` session (no API ke
 Obsidian vault is auto-detected if available.
 Config is stored at `~/.config/rwd/config.toml`.
 
+Auth methods by provider:
+- `anthropic`, `openai`: API key auth
+- `codex`: Codex login session auth (`codex login`)
+
 ### Change settings
 
 ```bash
 rwd config output-path /path/to/vault    # Change output path
 rwd config provider codex                # Change LLM provider
-rwd config api-key sk-...                # Change API key
+rwd config api-key sk-...                # Set API key for current provider (openai/anthropic)
+rwd config openai-api-key sk-...         # Set OpenAI API key directly
+rwd config anthropic-api-key sk-ant-...  # Set Anthropic API key directly
 rwd config codex-model gpt-5.4           # Override Codex model (default: gpt-5.4)
 rwd config codex-reasoning xhigh         # Override Codex reasoning (default: xhigh)
 rwd config lang ko                       # Change output language (en/ko)
+rwd auth status                          # Show provider auth method + credential state
 ```
 
 ### Sensitive data masking
@@ -88,6 +95,7 @@ rwd today --lang ko    # Override output language for this run
 rwd summary            # Generate progress summary (Markdown) → save + copy to clipboard
 rwd slack              # Generate Slack-ready message → copy to clipboard
 rwd config             # Change settings (interactive menu)
+rwd auth status        # Show current provider auth status
 rwd update             # Update to the latest version
 ```
 
