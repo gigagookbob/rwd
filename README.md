@@ -85,6 +85,8 @@ rwd config codex-model gpt-5.4           # Override Codex model (default: gpt-5.
 rwd config codex-reasoning xhigh         # Override Codex reasoning (default: xhigh)
 rwd config lang ko                       # Change output language (en/ko)
 rwd auth status                          # Show provider auth method + credential state
+rwd reset --dry-run                      # Preview reset targets
+rwd reset --yes                          # Reset local config/cache state
 ```
 
 ### Sensitive data masking
@@ -105,9 +107,14 @@ rwd summary            # Generate progress summary (Markdown) → save + copy to
 rwd slack              # Generate Slack-ready message → copy to clipboard
 rwd config             # Change settings (interactive menu)
 rwd auth status        # Show current provider auth status
+rwd reset --dry-run    # Preview files that reset will remove
 rwd doctor             # Diagnose PATH/install/config/session-root issues
 rwd update             # Update to the latest version
 ```
+
+Update notice env toggles:
+- `RWD_DISABLE_UPDATE_CHECK=1 rwd today` — disable update notice
+- `RWD_FORCE_UPDATE_CHECK=1 cargo run -- today` — force update check even in local dev build
 
 ## Release policy (maintainers)
 

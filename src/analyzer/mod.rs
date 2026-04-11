@@ -90,10 +90,20 @@ pub async fn analyze_entries(
                 limits.requests_per_minute,
             )
         );
-    } else {
+    } else if provider.supports_rate_limit_probe() {
         eprintln!(
             "{}",
             crate::messages::status::rate_limit_fallback(
+                limits.input_tokens_per_minute,
+                limits.output_tokens_per_minute,
+                limits.requests_per_minute,
+            )
+        );
+    } else {
+        eprintln!(
+            "{}",
+            crate::messages::status::rate_limit_probe_skipped(
+                provider.display_name(),
                 limits.input_tokens_per_minute,
                 limits.output_tokens_per_minute,
                 limits.requests_per_minute,

@@ -611,6 +611,61 @@ pub async fn run_auth_status() -> Result<(), ConfigError> {
     Ok(())
 }
 
+fn reset_targets() -> Result<Vec<PathBuf>, ConfigError> {
+    let home = dirs::home_dir().ok_or(crate::messages::error::HOME_DIR_NOT_FOUND)?;
+    Ok(vec![
+        config_path()?,
+        home.join(".rwd").join("cache"),
+        home.join(".rwd").join("worker.lock"),
+        home.join(".rwd").join("worker.log"),
+    ])
+}
+
+/// `rwd reset` — removes local config/cache state so users can recover from bad state.
+pub fn run_reset(yes: bool, dry_run: bool) -> Result<(), ConfigError> {
+    let targets = reset_targets()?;
+    let existing: Vec<PathBuf> = targets.into_iter().filter(|p| p.exists()).collect();
+
+    if existing.is_empty() {
+        println!("{}", crate::messages::reset::NOTHING_TO_RESET);
+        return Ok(());
+    }
+
+    if dry_run {
+        println!("{}", crate::messages::reset::DRY_RUN_HEADER);
+        for path in &existing {
+            println!("{}", crate::messages::reset::item(&path.display()));
+        }
+        return Ok(());
+    }
+
+    if !yes {
+        let confirmed = Confirm::with_theme(&ColorfulTheme::default())
+            .with_prompt(crate::messages::reset::CONFIRM)
+            .default(false)
+            .interact_opt()?;
+        if confirmed != Some(true) {
+            println!("{}", crate::messages::reset::CANCELLED);
+            return Ok(());
+        }
+    }
+
+    for path in &existing {
+        if path.is_dir() {
+            std::fs::remove_dir_all(path)?;
+        } else {
+            std::fs::remove_file(path)?;
+        }
+    }
+
+    println!("{}", crate::messages::reset::REMOVED_HEADER);
+    for path in &existing {
+        println!("{}", crate::messages::reset::item(&path.display()));
+    }
+    println!("{}", crate::messages::reset::NEXT_STEP);
+    Ok(())
+}
+
 /// Reads a password with Esc support. Esc returns None (cancel), Enter returns the input.
 /// Reads a visible text input with Esc-to-cancel support.
 /// Returns `None` if user presses Escape, `Some(default)` if Enter on empty input.
@@ -820,11 +875,15 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
             .codex_reasoning_effort
             .as_deref()
             .unwrap_or(DEFAULT_CODEX_REASONING_EFFORT);
-        let current_provider_key = provider_api_key(&config.llm, &config.llm.provider);
-        let api_key_display = if provider_uses_api_key(&config.llm.provider) {
-            mask_api_key(current_provider_key)
+        let openai_detail = if config.llm.provider == "openai" {
+            "active"
         } else {
-            "unused (codex login)".to_string()
+            "inactive"
+        };
+        let anthropic_detail = if config.llm.provider == "anthropic" {
+            "active"
+        } else {
+            "inactive"
         };
         let items = vec![
             format!(
@@ -832,8 +891,12 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 config.llm.provider
             ),
             format!(
-                "{cyan}api-key{reset}       {dim}[{}]{reset}",
-                api_key_display
+                "{cyan}openai-api-key{reset}    {dim}[{} ({openai_detail})]{reset}",
+                mask_api_key(&config.llm.openai_api_key)
+            ),
+            format!(
+                "{cyan}anthropic-api-key{reset} {dim}[{} ({anthropic_detail})]{reset}",
+                mask_api_key(&config.llm.anthropic_api_key)
             ),
             format!("{cyan}codex-model{reset}   {dim}[{codex_model}]{reset}"),
             format!("{cyan}codex-reasoning{reset} {dim}[{codex_reasoning}]{reset}"),
@@ -908,16 +971,10 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                     eprintln!();
                 }
             }
-            // api-key
+            // openai-api-key
             1 => {
-                if config.llm.provider == "codex" {
-                    eprintln!(
-                        "{dim}  Codex provider uses `codex login` (API key is unused).{reset}\n"
-                    );
-                    continue;
-                }
-                let Some(new_key) = read_password_with_esc(crate::messages::config::NEW_API_KEY)?
-                else {
+                let key_prompt = crate::messages::config::new_provider_api_key("OpenAI");
+                let Some(new_key) = read_password_with_esc(&key_prompt)? else {
                     continue;
                 };
                 let new_key = new_key.trim().to_string();
@@ -926,32 +983,60 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                     continue;
                 }
                 let confirmed = Confirm::with_theme(&theme)
-                    .with_prompt(crate::messages::config::CONFIRM_API_KEY)
+                    .with_prompt(crate::messages::config::confirm_provider_api_key("OpenAI"))
                     .default(false)
                     .interact_opt()?;
                 if confirmed != Some(true) {
                     continue;
                 }
-                let old_masked = mask_api_key(provider_api_key(&config.llm, &config.llm.provider));
-                let provider = config.llm.provider.clone();
-                config.llm.set_api_key_for_provider(&provider, new_key);
+                let old_masked = mask_api_key(&config.llm.openai_api_key);
+                config.llm.openai_api_key = new_key;
                 save_config(&config, &config_file)?;
                 eprintln!(
                     "{green}{}{reset}",
                     crate::messages::config::changed(
                         &old_masked,
-                        &mask_api_key(provider_api_key(&config.llm, &config.llm.provider))
+                        &mask_api_key(&config.llm.openai_api_key)
                     )
                 );
-                verify_api_key(
-                    &config.llm.provider,
-                    provider_api_key(&config.llm, &config.llm.provider),
-                )
-                .await;
+                verify_api_key("openai", &config.llm.openai_api_key).await;
+                eprintln!();
+            }
+            // anthropic-api-key
+            2 => {
+                let key_prompt = crate::messages::config::new_provider_api_key("Anthropic");
+                let Some(new_key) = read_password_with_esc(&key_prompt)? else {
+                    continue;
+                };
+                let new_key = new_key.trim().to_string();
+
+                if new_key.is_empty() {
+                    continue;
+                }
+                let confirmed = Confirm::with_theme(&theme)
+                    .with_prompt(crate::messages::config::confirm_provider_api_key(
+                        "Anthropic",
+                    ))
+                    .default(false)
+                    .interact_opt()?;
+                if confirmed != Some(true) {
+                    continue;
+                }
+                let old_masked = mask_api_key(&config.llm.anthropic_api_key);
+                config.llm.anthropic_api_key = new_key;
+                save_config(&config, &config_file)?;
+                eprintln!(
+                    "{green}{}{reset}",
+                    crate::messages::config::changed(
+                        &old_masked,
+                        &mask_api_key(&config.llm.anthropic_api_key)
+                    )
+                );
+                verify_api_key("anthropic", &config.llm.anthropic_api_key).await;
                 eprintln!();
             }
             // codex-model
-            2 => {
+            3 => {
                 let old_effective = config
                     .llm
                     .codex_model
@@ -977,7 +1062,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 }
             }
             // codex-reasoning
-            3 => {
+            4 => {
                 let old_effective = config
                     .llm
                     .codex_reasoning_effort
@@ -1014,7 +1099,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 }
             }
             // output-path
-            4 => {
+            5 => {
                 let old = config.output.path.clone();
                 let prompt = format!("  {} ({old}): ", crate::messages::config::OUTPUT_PATH);
                 let Some(new_path) = read_input_with_esc(&prompt, &old)? else {
@@ -1033,7 +1118,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 }
             }
             // redactor
-            5 => {
+            6 => {
                 let old_enabled = config.is_redactor_enabled();
                 let options = ["on", "off"];
                 let current_idx = if old_enabled { 0 } else { 1 };
@@ -1062,7 +1147,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 }
             }
             // lang
-            6 => {
+            7 => {
                 let langs = ["en", "ko"];
                 let current_idx = config.lang.as_ref().map_or(0, |l| match l {
                     Lang::En => 0,
@@ -1095,7 +1180,7 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
                 }
             }
             // exit
-            7 => {
+            8 => {
                 console::Term::stderr().clear_last_lines(1)?;
                 break;
             }

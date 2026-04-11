@@ -212,6 +212,11 @@ impl LlmProvider {
             None => (super::planner::RateLimits::default_generous(), false),
         }
     }
+
+    /// Returns true if this provider supports rate-limit probing.
+    pub fn supports_rate_limit_probe(&self) -> bool {
+        !matches!(self, LlmProvider::Codex { .. })
+    }
 }
 
 /// Loads the LLM provider and API key from config (~/.config/rwd/config.toml).
@@ -241,7 +246,8 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
                 String::new(),
             )
         }
-        _ => (LlmProvider::Anthropic, config.llm.anthropic_api_key.clone()),
+        "anthropic" => (LlmProvider::Anthropic, config.llm.anthropic_api_key.clone()),
+        other => return Err(crate::messages::error::unsupported_provider_in_config(other).into()),
     };
     Ok((provider, api_key))
 }
