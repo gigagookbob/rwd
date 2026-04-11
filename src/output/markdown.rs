@@ -10,10 +10,7 @@ use crate::analyzer::insight::{AnalysisResult, SessionInsight, TilItem};
 /// Each source is separated by a ## heading.
 ///
 /// sources: slice of (source name, analysis result) tuples.
-pub fn render_combined_markdown(
-    sources: &[(&str, &AnalysisResult)],
-    date: NaiveDate,
-) -> String {
+pub fn render_combined_markdown(sources: &[(&str, &AnalysisResult)], date: NaiveDate) -> String {
     let mut md = String::new();
     md.push_str(&format!("# {date} Dev Session Review\n\n"));
 
@@ -58,10 +55,17 @@ pub fn render_markdown(analysis: &AnalysisResult, date: NaiveDate) -> String {
 /// TIL items are collected separately and not rendered here.
 fn render_session(md: &mut String, session: &SessionInsight) {
     md.push_str(&format!("## Session: {}\n\n", session.session_id));
-    md.push_str(&format!("{}\n{}\n\n", crate::messages::markdown::WORK_SUMMARY_HEADER, session.work_summary));
+    md.push_str(&format!(
+        "{}\n{}\n\n",
+        crate::messages::markdown::WORK_SUMMARY_HEADER,
+        session.work_summary
+    ));
 
     if !session.decisions.is_empty() {
-        md.push_str(&format!("{}\n", crate::messages::markdown::DECISIONS_HEADER));
+        md.push_str(&format!(
+            "{}\n",
+            crate::messages::markdown::DECISIONS_HEADER
+        ));
         for d in &session.decisions {
             md.push_str(&format!("- **{}**: {}\n", d.what, d.why));
         }
@@ -69,7 +73,10 @@ fn render_session(md: &mut String, session: &SessionInsight) {
     }
 
     if !session.curiosities.is_empty() {
-        md.push_str(&format!("{}\n", crate::messages::markdown::CURIOSITIES_HEADER));
+        md.push_str(&format!(
+            "{}\n",
+            crate::messages::markdown::CURIOSITIES_HEADER
+        ));
         for c in &session.curiosities {
             md.push_str(&format!("- {c}\n"));
         }
@@ -77,9 +84,18 @@ fn render_session(md: &mut String, session: &SessionInsight) {
     }
 
     if !session.corrections.is_empty() {
-        md.push_str(&format!("{}\n", crate::messages::markdown::CORRECTIONS_HEADER));
+        md.push_str(&format!(
+            "{}\n",
+            crate::messages::markdown::CORRECTIONS_HEADER
+        ));
         for c in &session.corrections {
-            md.push_str(&format!("- {}: {}\n  {}: {}\n", crate::messages::markdown::CORRECTION_MODEL, c.model_said, crate::messages::markdown::CORRECTION_FIX, c.user_corrected));
+            md.push_str(&format!(
+                "- {}: {}\n  {}: {}\n",
+                crate::messages::markdown::CORRECTION_MODEL,
+                c.model_said,
+                crate::messages::markdown::CORRECTION_FIX,
+                c.user_corrected
+            ));
         }
         md.push('\n');
     }

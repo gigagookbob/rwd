@@ -87,9 +87,7 @@ pub fn build_execution_plan(
     let recommended_max_tokens = (estimated_output as u64).min(model_max_output);
 
     // Single-shot condition: both input AND output fit within limits.
-    if total + SUMMARY_BUDGET_TOKENS <= itpm
-        && (estimated_output as u64) <= model_max_output
-    {
+    if total + SUMMARY_BUDGET_TOKENS <= itpm && (estimated_output as u64) <= model_max_output {
         return ExecutionPlan {
             rate_limits: limits.clone(),
             steps: Vec::new(),
@@ -107,7 +105,9 @@ pub fn build_execution_plan(
                 StepStrategy::Direct
             } else {
                 let chunks = ((est.estimated_tokens as f64) / (itpm as f64)).ceil() as usize;
-                StepStrategy::Summarize { chunks: chunks.max(2) }
+                StepStrategy::Summarize {
+                    chunks: chunks.max(2),
+                }
             };
             ExecutionStep {
                 session_id: est.session_id.clone(),
@@ -146,8 +146,14 @@ mod tests {
             requests_per_minute: 100,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000 },
-            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000 },
+            SessionEstimate {
+                session_id: "s1".into(),
+                estimated_tokens: 10_000,
+            },
+            SessionEstimate {
+                session_id: "s2".into(),
+                estimated_tokens: 20_000,
+            },
         ];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(plan.is_single_shot);
@@ -163,8 +169,14 @@ mod tests {
             requests_per_minute: 50,
         };
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 10_000 },
-            SessionEstimate { session_id: "s2".into(), estimated_tokens: 20_000 },
+            SessionEstimate {
+                session_id: "s1".into(),
+                estimated_tokens: 10_000,
+            },
+            SessionEstimate {
+                session_id: "s2".into(),
+                estimated_tokens: 20_000,
+            },
         ];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(!plan.is_single_shot);
@@ -180,21 +192,26 @@ mod tests {
             output_tokens_per_minute: 8_000,
             requests_per_minute: 50,
         };
-        let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
-        ];
+        let estimates = vec![SessionEstimate {
+            session_id: "s1".into(),
+            estimated_tokens: 50_000,
+        }];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(!plan.is_single_shot);
         assert_eq!(plan.steps.len(), 1);
-        assert_eq!(plan.steps[0].strategy, StepStrategy::Summarize { chunks: 2 });
+        assert_eq!(
+            plan.steps[0].strategy,
+            StepStrategy::Summarize { chunks: 2 }
+        );
     }
 
     #[test]
     fn test_build_plan_default_generous_is_single_shot() {
         let limits = RateLimits::default_generous();
-        let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
-        ];
+        let estimates = vec![SessionEstimate {
+            session_id: "s1".into(),
+            estimated_tokens: 50_000,
+        }];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(plan.is_single_shot);
     }
@@ -206,9 +223,10 @@ mod tests {
             output_tokens_per_minute: 8_000,
             requests_per_minute: 50,
         };
-        let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 31_000 },
-        ];
+        let estimates = vec![SessionEstimate {
+            session_id: "s1".into(),
+            estimated_tokens: 31_000,
+        }];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(!plan.is_single_shot);
     }
@@ -220,9 +238,10 @@ mod tests {
             output_tokens_per_minute: 8_000,
             requests_per_minute: 50,
         };
-        let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 30_000 },
-        ];
+        let estimates = vec![SessionEstimate {
+            session_id: "s1".into(),
+            estimated_tokens: 30_000,
+        }];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(plan.is_single_shot);
     }
@@ -245,8 +264,14 @@ mod tests {
     fn test_single_shot_allowed_when_output_fits() {
         let limits = RateLimits::default_generous();
         let estimates = vec![
-            SessionEstimate { session_id: "s1".into(), estimated_tokens: 50_000 },
-            SessionEstimate { session_id: "s2".into(), estimated_tokens: 30_000 },
+            SessionEstimate {
+                session_id: "s1".into(),
+                estimated_tokens: 50_000,
+            },
+            SessionEstimate {
+                session_id: "s2".into(),
+                estimated_tokens: 30_000,
+            },
         ];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
         assert!(plan.is_single_shot);

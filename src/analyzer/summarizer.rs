@@ -21,10 +21,7 @@ pub fn get_chunk_summarize_prompt(lang: &Lang) -> &'static str {
 /// Splits messages into chunks that fit within the ITPM limit.
 /// Splits only at message boundaries (never mid-message).
 /// A single message exceeding the limit becomes its own chunk.
-pub fn split_into_chunks(
-    messages: &[(String, String)],
-    itpm: u64,
-) -> Vec<Vec<(String, String)>> {
+pub fn split_into_chunks(messages: &[(String, String)], itpm: u64) -> Vec<Vec<(String, String)>> {
     if messages.is_empty() {
         return Vec::new();
     }
@@ -84,12 +81,7 @@ pub async fn summarize_chunks(
         let sp = super::start_spinner(crate::messages::status::chunk_summarizing(i + 1, total));
 
         let (summary, _usage) = provider
-            .call_api_with_max_tokens(
-                api_key,
-                get_chunk_summarize_prompt(lang),
-                &chunk_text,
-                2000,
-            )
+            .call_api_with_max_tokens(api_key, get_chunk_summarize_prompt(lang), &chunk_text, 2000)
             .await?;
         super::stop_spinner(sp);
         eprintln!("{}", crate::messages::status::chunk_done(i + 1, total));
@@ -127,9 +119,7 @@ mod tests {
 
     #[test]
     fn test_split_into_chunks_single_message_exceeds_limit() {
-        let messages = vec![
-            ("USER".to_string(), "a".repeat(100)),
-        ];
+        let messages = vec![("USER".to_string(), "a".repeat(100))];
         let chunks = split_into_chunks(&messages, 25);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].len(), 1);

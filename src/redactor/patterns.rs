@@ -29,10 +29,12 @@ pub fn builtin_rules() -> Vec<RedactorRule> {
         LazyLock::new(|| Regex::new(r"\bgh[ps]_[a-zA-Z0-9]{36,}\b").expect("GITHUB_TOKEN regex"));
     static SLACK_TOKEN: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"\bxox[bpsa]-[a-zA-Z0-9\-]+\b").expect("SLACK_TOKEN regex"));
-    static BEARER_TOKEN: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"Bearer\s+[a-zA-Z0-9\-._~+/]+=*").expect("BEARER_TOKEN regex"));
+    static BEARER_TOKEN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"Bearer\s+[a-zA-Z0-9\-._~+/]+=*").expect("BEARER_TOKEN regex")
+    });
     static ENV_SECRET: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r#"(?i)(password|secret|api_key)\s*=\s*["'][^"']+["']"#).expect("ENV_SECRET regex")
+        Regex::new(r#"(?i)(password|secret|api_key)\s*=\s*["'][^"']+["']"#)
+            .expect("ENV_SECRET regex")
     });
     static PRIVATE_IP: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"\b(10\.\d+\.\d+\.\d+|172\.(1[6-9]|2\d|3[01])\.\d+\.\d+|192\.168\.\d+\.\d+)\b")
@@ -43,13 +45,45 @@ pub fn builtin_rules() -> Vec<RedactorRule> {
     });
 
     vec![
-        RedactorRule { name: "API_KEY", kind: PatternKind::FixedPrefix, pattern: &API_KEY },
-        RedactorRule { name: "AWS_KEY", kind: PatternKind::FixedPrefix, pattern: &AWS_KEY },
-        RedactorRule { name: "GITHUB_TOKEN", kind: PatternKind::FixedPrefix, pattern: &GITHUB_TOKEN },
-        RedactorRule { name: "SLACK_TOKEN", kind: PatternKind::FixedPrefix, pattern: &SLACK_TOKEN },
-        RedactorRule { name: "BEARER_TOKEN", kind: PatternKind::Regex, pattern: &BEARER_TOKEN },
-        RedactorRule { name: "ENV_SECRET", kind: PatternKind::Regex, pattern: &ENV_SECRET },
-        RedactorRule { name: "PRIVATE_IP", kind: PatternKind::Regex, pattern: &PRIVATE_IP },
-        RedactorRule { name: "PRIVATE_KEY", kind: PatternKind::Regex, pattern: &PRIVATE_KEY },
+        RedactorRule {
+            name: "API_KEY",
+            kind: PatternKind::FixedPrefix,
+            pattern: &API_KEY,
+        },
+        RedactorRule {
+            name: "AWS_KEY",
+            kind: PatternKind::FixedPrefix,
+            pattern: &AWS_KEY,
+        },
+        RedactorRule {
+            name: "GITHUB_TOKEN",
+            kind: PatternKind::FixedPrefix,
+            pattern: &GITHUB_TOKEN,
+        },
+        RedactorRule {
+            name: "SLACK_TOKEN",
+            kind: PatternKind::FixedPrefix,
+            pattern: &SLACK_TOKEN,
+        },
+        RedactorRule {
+            name: "BEARER_TOKEN",
+            kind: PatternKind::Regex,
+            pattern: &BEARER_TOKEN,
+        },
+        RedactorRule {
+            name: "ENV_SECRET",
+            kind: PatternKind::Regex,
+            pattern: &ENV_SECRET,
+        },
+        RedactorRule {
+            name: "PRIVATE_IP",
+            kind: PatternKind::Regex,
+            pattern: &PRIVATE_IP,
+        },
+        RedactorRule {
+            name: "PRIVATE_KEY",
+            kind: PatternKind::Regex,
+            pattern: &PRIVATE_KEY,
+        },
     ]
 }

@@ -55,7 +55,11 @@ async fn countdown_sleep(total_secs: u64) {
     let mut i = 0;
     for remaining in (1..=total_secs).rev() {
         for _ in 0..12 {
-            eprint!("\r{} {}", frames[i % frames.len()], crate::messages::status::countdown_waiting(remaining));
+            eprint!(
+                "\r{} {}",
+                frames[i % frames.len()],
+                crate::messages::status::countdown_waiting(remaining)
+            );
             let _ = std::io::stderr().flush();
             i += 1;
             tokio::time::sleep(std::time::Duration::from_millis(83)).await;
@@ -151,16 +155,39 @@ pub async fn analyze_entries(
         } else {
             (prompt_text, RedactResult::empty())
         };
-        let (raw_response, usage) = provider.call_api(&api_key, &final_prompt, plan.recommended_max_tokens as u32, lang).await?;
+        let (raw_response, usage) = provider
+            .call_api(
+                &api_key,
+                &final_prompt,
+                plan.recommended_max_tokens as u32,
+                lang,
+            )
+            .await?;
         let elapsed = started.elapsed();
         stop_spinner(sp);
         if verbose {
-            eprintln!("{}", crate::messages::verbose::api_done_single(elapsed.as_secs_f64(), usage.input_tokens, usage.output_tokens));
+            eprintln!(
+                "{}",
+                crate::messages::verbose::api_done_single(
+                    elapsed.as_secs_f64(),
+                    usage.input_tokens,
+                    usage.output_tokens
+                )
+            );
         }
         let result = insight::parse_response(&raw_response)?;
         Ok((result, redact_result))
     } else {
-        execute_plan(&plan, entries, &provider, &api_key, redactor_enabled, verbose, lang).await
+        execute_plan(
+            &plan,
+            entries,
+            &provider,
+            &api_key,
+            redactor_enabled,
+            verbose,
+            lang,
+        )
+        .await
     }
 }
 
@@ -176,16 +203,26 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
 }
 
 /// Generates a development progress summary from concatenated session work_summaries.
-pub async fn analyze_summary(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
+pub async fn analyze_summary(
+    session_summaries: &str,
+    lang: &crate::config::Lang,
+) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let (raw_response, _usage) = provider.call_summary_api(&api_key, session_summaries, lang).await?;
+    let (raw_response, _usage) = provider
+        .call_summary_api(&api_key, session_summaries, lang)
+        .await?;
     Ok(raw_response)
 }
 
 /// Generates a Slack-ready message from concatenated session work_summaries.
-pub async fn analyze_slack(session_summaries: &str, lang: &crate::config::Lang) -> Result<String, AnalyzerError> {
+pub async fn analyze_slack(
+    session_summaries: &str,
+    lang: &crate::config::Lang,
+) -> Result<String, AnalyzerError> {
     let (provider, api_key) = provider::load_provider()?;
-    let (raw_response, _usage) = provider.call_slack_api(&api_key, session_summaries, lang).await?;
+    let (raw_response, _usage) = provider
+        .call_slack_api(&api_key, session_summaries, lang)
+        .await?;
     Ok(raw_response)
 }
 
@@ -203,7 +240,9 @@ pub async fn analyze_codex_entries(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let (raw_response, _usage) = provider.call_api(&api_key, &final_prompt, 1_950, lang).await?;
+    let (raw_response, _usage) = provider
+        .call_api(&api_key, &final_prompt, 1_950, lang)
+        .await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result))
 }
@@ -233,19 +272,19 @@ async fn execute_plan(
         let use_spinner = step.strategy == StepStrategy::Direct;
         let step_start = std::time::Instant::now();
         let sp = if use_spinner {
-            Some(start_spinner(
-                crate::messages::status::step_analyzing(i + 1, total_steps, &step.session_id)
-            ))
+            Some(start_spinner(crate::messages::status::step_analyzing(
+                i + 1,
+                total_steps,
+                &step.session_id,
+            )))
         } else {
             None
         };
 
         let result = match &step.strategy {
             StepStrategy::Direct => {
-                execute_direct_step(
-                    &session_entries, provider, api_key, redactor_enabled, lang,
-                )
-                .await
+                execute_direct_step(&session_entries, provider, api_key, redactor_enabled, lang)
+                    .await
             }
             StepStrategy::Summarize { .. } => {
                 execute_summarize_step(
@@ -263,13 +302,22 @@ async fn execute_plan(
 
         match result {
             Ok((analysis, redact, usage)) => {
-                if let Some(h) = sp { stop_spinner(h); }
+                if let Some(h) = sp {
+                    stop_spinner(h);
+                }
                 let elapsed = step_start.elapsed();
                 if verbose {
-                    eprintln!("{}", crate::messages::verbose::step_done_detail(
-                        i + 1, total_steps, &step.session_id,
-                        elapsed.as_secs_f64(), usage.input_tokens, usage.output_tokens,
-                    ));
+                    eprintln!(
+                        "{}",
+                        crate::messages::verbose::step_done_detail(
+                            i + 1,
+                            total_steps,
+                            &step.session_id,
+                            elapsed.as_secs_f64(),
+                            usage.input_tokens,
+                            usage.output_tokens,
+                        )
+                    );
                 } else {
                     eprintln!("{}", crate::messages::status::step_done(i + 1, total_steps));
                 }
@@ -277,16 +325,20 @@ async fn execute_plan(
                 total_redact.merge(redact);
             }
             Err(e) => {
-                if let Some(h) = sp { stop_spinner(h); }
+                if let Some(h) = sp {
+                    stop_spinner(h);
+                }
                 let err_msg = e.to_string();
                 if err_msg.contains("429") {
                     // 429 rate limit: wait 60s then retry
                     countdown_sleep(60).await;
 
                     let retry_sp = if use_spinner {
-                        Some(start_spinner(
-                            crate::messages::status::step_retrying(i + 1, total_steps, &step.session_id)
-                        ))
+                        Some(start_spinner(crate::messages::status::step_retrying(
+                            i + 1,
+                            total_steps,
+                            &step.session_id,
+                        )))
                     } else {
                         None
                     };
@@ -318,25 +370,39 @@ async fn execute_plan(
 
                     match retry {
                         Ok((analysis, redact, _usage)) => {
-                            if let Some(h) = retry_sp { stop_spinner(h); }
-                            eprintln!("{}", crate::messages::status::step_retry_success(i + 1, total_steps));
+                            if let Some(h) = retry_sp {
+                                stop_spinner(h);
+                            }
+                            eprintln!(
+                                "{}",
+                                crate::messages::status::step_retry_success(i + 1, total_steps)
+                            );
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
-                            if let Some(h) = retry_sp { stop_spinner(h); }
+                            if let Some(h) = retry_sp {
+                                stop_spinner(h);
+                            }
                             eprintln!(
                                 "{}",
-                                crate::messages::status::step_skip_retry(i + 1, total_steps, &step.session_id, &retry_err)
+                                crate::messages::status::step_skip_retry(
+                                    i + 1,
+                                    total_steps,
+                                    &step.session_id,
+                                    &retry_err
+                                )
                             );
                         }
                     }
                 } else if err_msg.contains(crate::messages::error::JSON_PARSE_FAILED_MARKER) {
                     // JSON parse failure: retry with a stronger JSON-only instruction
                     let retry_sp = if use_spinner {
-                        Some(start_spinner(
-                            crate::messages::status::step_reanalyzing(i + 1, total_steps, &step.session_id)
-                        ))
+                        Some(start_spinner(crate::messages::status::step_reanalyzing(
+                            i + 1,
+                            total_steps,
+                            &step.session_id,
+                        )))
                     } else {
                         None
                     };
@@ -344,14 +410,23 @@ async fn execute_plan(
                     let retry = match &step.strategy {
                         StepStrategy::Direct => {
                             execute_direct_step_with_json_hint(
-                                &session_entries, provider, api_key, redactor_enabled, lang,
+                                &session_entries,
+                                provider,
+                                api_key,
+                                redactor_enabled,
+                                lang,
                             )
                             .await
                         }
                         StepStrategy::Summarize { .. } => {
                             execute_summarize_step_with_json_hint(
-                                &session_entries, &step.session_id,
-                                provider, api_key, &plan.rate_limits, redactor_enabled, lang,
+                                &session_entries,
+                                &step.session_id,
+                                provider,
+                                api_key,
+                                &plan.rate_limits,
+                                redactor_enabled,
+                                lang,
                             )
                             .await
                         }
@@ -359,23 +434,43 @@ async fn execute_plan(
 
                     match retry {
                         Ok((analysis, redact, _usage)) => {
-                            if let Some(h) = retry_sp { stop_spinner(h); }
-                            eprintln!("{}", crate::messages::status::step_reanalysis_success(i + 1, total_steps));
+                            if let Some(h) = retry_sp {
+                                stop_spinner(h);
+                            }
+                            eprintln!(
+                                "{}",
+                                crate::messages::status::step_reanalysis_success(
+                                    i + 1,
+                                    total_steps
+                                )
+                            );
                             results.push(analysis);
                             total_redact.merge(redact);
                         }
                         Err(retry_err) => {
-                            if let Some(h) = retry_sp { stop_spinner(h); }
+                            if let Some(h) = retry_sp {
+                                stop_spinner(h);
+                            }
                             eprintln!(
                                 "{}",
-                                crate::messages::status::step_skip_reanalysis(i + 1, total_steps, &step.session_id, &retry_err)
+                                crate::messages::status::step_skip_reanalysis(
+                                    i + 1,
+                                    total_steps,
+                                    &step.session_id,
+                                    &retry_err
+                                )
                             );
                         }
                     }
                 } else {
                     eprintln!(
                         "{}",
-                        crate::messages::status::step_skip(i + 1, total_steps, &step.session_id, &err_msg)
+                        crate::messages::status::step_skip(
+                            i + 1,
+                            total_steps,
+                            &step.session_id,
+                            &err_msg
+                        )
                     );
                 }
             }
@@ -383,8 +478,7 @@ async fn execute_plan(
 
         // Rate pacing: wait between steps (skip after the last one).
         if i + 1 < total_steps {
-            let wait =
-                summarizer::calculate_wait(step.estimated_tokens, &plan.rate_limits);
+            let wait = summarizer::calculate_wait(step.estimated_tokens, &plan.rate_limits);
             if wait > 0.0 {
                 countdown_sleep(wait.ceil() as u64).await;
             }
@@ -420,7 +514,9 @@ async fn execute_direct_step(
     } else {
         (prompt_text, RedactResult::empty())
     };
-    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider
+        .call_api(api_key, &final_prompt, 4_096, lang)
+        .await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result, usage))
 }
@@ -440,7 +536,9 @@ async fn execute_direct_step_with_json_hint(
     } else {
         (hinted, RedactResult::empty())
     };
-    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider
+        .call_api(api_key, &final_prompt, 4_096, lang)
+        .await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result, usage))
 }
@@ -456,8 +554,7 @@ async fn execute_summarize_step(
     lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult, ApiUsage), AnalyzerError> {
     let messages = prompt::extract_messages(entries);
-    let chunks =
-        summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
+    let chunks = summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
     let summary_text =
         summarizer::summarize_chunks(&chunks, provider, api_key, limits, lang).await?;
 
@@ -467,7 +564,9 @@ async fn execute_summarize_step(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider
+        .call_api(api_key, &final_prompt, 4_096, lang)
+        .await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result, usage))
 }
@@ -483,8 +582,7 @@ async fn execute_summarize_step_with_json_hint(
     lang: &crate::config::Lang,
 ) -> Result<(AnalysisResult, RedactResult, ApiUsage), AnalyzerError> {
     let messages = prompt::extract_messages(entries);
-    let chunks =
-        summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
+    let chunks = summarizer::split_into_chunks(&messages, limits.input_tokens_per_minute);
     let summary_text =
         summarizer::summarize_chunks(&chunks, provider, api_key, limits, lang).await?;
 
@@ -494,7 +592,9 @@ async fn execute_summarize_step_with_json_hint(
     } else {
         (prompt_with_session, RedactResult::empty())
     };
-    let (raw_response, usage) = provider.call_api(api_key, &final_prompt, 4_096, lang).await?;
+    let (raw_response, usage) = provider
+        .call_api(api_key, &final_prompt, 4_096, lang)
+        .await?;
     let result = insight::parse_response(&raw_response)?;
     Ok((result, redact_result, usage))
 }
