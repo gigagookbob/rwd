@@ -29,6 +29,7 @@ Examples:
   rwd config openai-api-key sk-...  Set OpenAI API key
   rwd config anthropic-api-key ...  Set Anthropic API key
   rwd auth status                   Show provider auth status
+  rwd doctor                        Run environment and install diagnostics
   rwd update                        Update to the latest version"
 )]
 pub struct Cli {
@@ -121,6 +122,8 @@ Example:
         #[command(subcommand)]
         action: AuthAction,
     },
+    /// Run environment and install diagnostics
+    Doctor,
 }
 
 #[derive(Subcommand)]

@@ -26,6 +26,15 @@ rwd answers **"What did I decide today, and why?"** — it extracts decisions, c
 curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
 ```
 
+By default, this installs `rwd` to `~/.local/bin` (override with `RWD_INSTALL_DIR`).
+
+If you previously installed via `cargo install` or `/usr/local/bin`, keep only one binary in PATH:
+
+```bash
+cargo uninstall rwd
+sudo rm /usr/local/bin/rwd
+```
+
 ### One-line install (Windows)
 
 ```powershell
@@ -46,7 +55,7 @@ cargo install --git https://github.com/gigagookbob/rwd.git
 
 > If macOS shows "unidentified developer" warning:
 > ```bash
-> xattr -d com.apple.quarantine /usr/local/bin/rwd
+> xattr -d com.apple.quarantine ~/.local/bin/rwd
 > ```
 
 ## Setup
@@ -96,6 +105,7 @@ rwd summary            # Generate progress summary (Markdown) → save + copy to
 rwd slack              # Generate Slack-ready message → copy to clipboard
 rwd config             # Change settings (interactive menu)
 rwd auth status        # Show current provider auth status
+rwd doctor             # Diagnose PATH/install/config/session-root issues
 rwd update             # Update to the latest version
 ```
 

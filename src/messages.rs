@@ -430,6 +430,29 @@ pub mod update {
         format!("rwd v{version} update complete!")
     }
 
+    #[cfg(unix)]
+    pub fn user_bin_update_complete(path: &dyn std::fmt::Display, version: &str) -> String {
+        format!("rwd v{version} update complete! Installed to {path}")
+    }
+
+    #[cfg(unix)]
+    pub const USER_BIN_PATH_HINT: &str =
+        "Tip: ensure ~/.local/bin comes before system directories in PATH.";
+
+    #[cfg(unix)]
+    pub const DUPLICATE_BINARIES_FOUND: &str =
+        "Multiple `rwd` binaries are visible in PATH. Keep one to avoid confusion.";
+
+    #[cfg(unix)]
+    pub fn active_binary(path: &dyn std::fmt::Display) -> String {
+        format!("Active binary: {path}")
+    }
+
+    #[cfg(unix)]
+    pub fn cleanup_duplicate(path: &dyn std::fmt::Display, command: &str) -> String {
+        format!("Remove duplicate {path} with: {command}")
+    }
+
     #[cfg(windows)]
     pub fn update_deferred(version: &str) -> String {
         format!("Finalizing v{version} update...")

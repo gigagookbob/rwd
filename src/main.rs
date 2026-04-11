@@ -2,6 +2,7 @@ mod analyzer;
 mod cache;
 mod cli;
 mod config;
+mod doctor;
 mod messages;
 mod output;
 mod parser;
@@ -32,7 +33,7 @@ async fn main() {
 
     // Show update notification only for synchronous commands.
     // Worker mode skips this to avoid blocking (no terminal).
-    let skip_update = matches!(args.command, Commands::Update)
+    let skip_update = matches!(args.command, Commands::Update | Commands::Doctor)
         || matches!(args.command, Commands::Today { worker: true, .. });
     if !skip_update {
         update::notify_if_update_available().await;
@@ -99,6 +100,12 @@ async fn main() {
         Commands::Update => {
             if let Err(e) = update::run_update().await {
                 eprintln!("{}", crate::messages::error::update_failed(&e));
+                std::process::exit(1);
+            }
+        }
+        Commands::Doctor => {
+            if let Err(e) = doctor::run_doctor() {
+                eprintln!("Error: {e}");
                 std::process::exit(1);
             }
         }
