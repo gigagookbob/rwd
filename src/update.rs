@@ -44,9 +44,7 @@ pub async fn notify_if_update_available() {
     if let Some(cached) = crate::cache::load_update_check() {
         let now = chrono::Utc::now();
         let interval = chrono::Duration::hours(24);
-        if is_newer(&cached.latest_version, CURRENT_VERSION)
-            && now - cached.checked_at < interval
-        {
+        if is_newer(&cached.latest_version, CURRENT_VERSION) && now - cached.checked_at < interval {
             print_update_notice(&cached.latest_version);
             return;
         }
@@ -84,17 +82,22 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     let latest = check_latest_version().await?;
 
     if !is_newer(&latest, CURRENT_VERSION) {
-        eprintln!("{}", crate::messages::update::already_latest(CURRENT_VERSION));
+        eprintln!(
+            "{}",
+            crate::messages::update::already_latest(CURRENT_VERSION)
+        );
         return Ok(());
     }
 
-    eprintln!("{}", crate::messages::update::updating(CURRENT_VERSION, &latest));
+    eprintln!(
+        "{}",
+        crate::messages::update::updating(CURRENT_VERSION, &latest)
+    );
 
     // Determine platform-specific asset name
     let asset_name = detect_asset_name()?;
-    let download_url = format!(
-        "https://github.com/{REPO}/releases/download/v{latest}/{asset_name}"
-    );
+    let download_url =
+        format!("https://github.com/{REPO}/releases/download/v{latest}/{asset_name}");
 
     // Download binary
     eprintln!("{}", crate::messages::update::downloading(&download_url));
@@ -234,9 +237,7 @@ fn schedule_deferred_replace(
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::windows::process::CommandExt;
 
-    let tmp_dir = new_binary
-        .parent()
-        .ok_or("cannot resolve temp directory")?;
+    let tmp_dir = new_binary.parent().ok_or("cannot resolve temp directory")?;
     let script_path = std::env::temp_dir().join("rwd_update.cmd");
 
     let script = format!(
@@ -311,7 +312,12 @@ fn replace_binary_unix(
             }
 
             let move_status = std::process::Command::new("sudo")
-                .args(["mv", "-f", &staged.to_string_lossy(), &target.to_string_lossy()])
+                .args([
+                    "mv",
+                    "-f",
+                    &staged.to_string_lossy(),
+                    &target.to_string_lossy(),
+                ])
                 .status()?;
             if move_status.success() {
                 return Ok(());
@@ -390,10 +396,8 @@ mod tests {
     fn stage_and_rename_unix_replaces_target_atomically() {
         use std::os::unix::fs::PermissionsExt;
 
-        let temp_dir = std::env::temp_dir().join(format!(
-            "rwd_update_stage_test_{}",
-            std::process::id()
-        ));
+        let temp_dir =
+            std::env::temp_dir().join(format!("rwd_update_stage_test_{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&temp_dir);
         std::fs::create_dir_all(&temp_dir).expect("create temp dir");
 

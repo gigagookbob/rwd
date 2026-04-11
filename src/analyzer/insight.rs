@@ -128,10 +128,7 @@ fn extract_json_object(text: &str) -> Result<AnalysisResult, serde_json::Error> 
 /// Merges multiple AnalysisResults into one by concatenating their session vecs.
 /// Used to combine per-session fallback results into a single output.
 pub fn merge_results(results: Vec<AnalysisResult>) -> AnalysisResult {
-    let sessions = results
-        .into_iter()
-        .flat_map(|r| r.sessions)
-        .collect();
+    let sessions = results.into_iter().flat_map(|r| r.sessions).collect();
     AnalysisResult { sessions }
 }
 

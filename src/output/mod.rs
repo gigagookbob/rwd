@@ -13,8 +13,7 @@ use chrono::NaiveDate;
 
 /// Loads the Obsidian vault path from config (~/.config/rwd/config.toml).
 pub fn load_vault_path() -> Result<PathBuf, OutputError> {
-    let config = crate::config::load_config_if_exists()
-        .ok_or(crate::messages::error::NO_CONFIG)?;
+    let config = crate::config::load_config_if_exists().ok_or(crate::messages::error::NO_CONFIG)?;
 
     let path = PathBuf::from(&config.output.path);
     if !path.exists() {
@@ -40,7 +39,6 @@ pub fn save_to_vault(
 
     Ok(file_path)
 }
-
 
 #[cfg(test)]
 mod tests {

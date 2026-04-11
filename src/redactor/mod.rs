@@ -58,7 +58,13 @@ pub fn redact_text(text: &str) -> (String, RedactResult) {
         }
     }
 
-    (result_text, RedactResult { total_count, by_type })
+    (
+        result_text,
+        RedactResult {
+            total_count,
+            by_type,
+        },
+    )
 }
 
 #[cfg(test)]
@@ -191,10 +197,7 @@ mod tests {
     fn test_format_summary_alphabetical() {
         let result = RedactResult {
             total_count: 4,
-            by_type: BTreeMap::from([
-                ("PRIVATE_IP".to_string(), 1),
-                ("API_KEY".to_string(), 3),
-            ]),
+            by_type: BTreeMap::from([("PRIVATE_IP".to_string(), 1), ("API_KEY".to_string(), 3)]),
         };
         assert_eq!(result.format_summary(), "API_KEY: 3, PRIVATE_IP: 1");
     }
