@@ -7,9 +7,11 @@
 
 use chrono::{DateTime, NaiveDate, Utc};
 use serde::Deserialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::io::BufRead;
 use std::path::{Path, PathBuf};
+
+use super::roots;
 
 // === Data type definitions ===
 
@@ -148,75 +150,41 @@ pub struct SessionSummary {
 
 // === File discovery functions ===
 
-/// Returns the path to ~/.claude/projects/.
+/// Returns all existing Claude project roots in priority order.
+/// Priority: config overrides -> native home -> WSL Windows homes.
+pub fn discover_claude_log_roots(config_roots: Option<&[String]>) -> Vec<PathBuf> {
+    let mut candidates = Vec::new();
+
+    if let Some(roots) = config_roots {
+        candidates.extend(roots.iter().map(PathBuf::from));
+    }
+
+    if let Some(home) = dirs::home_dir() {
+        candidates.push(home.join(".claude").join("projects"));
+    }
+
+    if cfg!(target_os = "linux") && roots::is_wsl_environment() {
+        for win_home in roots::wsl_windows_home_candidates() {
+            candidates.push(win_home.join(".claude").join("projects"));
+        }
+    }
+
+    roots::dedupe_existing_paths(candidates)
+}
+
+/// Backward-compatible single-root API.
 pub fn discover_log_dir() -> Result<PathBuf, super::ParseError> {
-    let home = dirs::home_dir().ok_or("Could not determine home directory")?;
-
-    let claude_projects = home.join(".claude").join("projects");
-    if claude_projects.exists() {
-        return Ok(claude_projects);
-    }
-
-    if cfg!(target_os = "linux") && is_wsl_environment() {
-        for win_home in wsl_windows_home_candidates() {
-            let candidate = win_home.join(".claude").join("projects");
-            if candidate.exists() {
-                return Ok(candidate);
-            }
-        }
-    }
-
-    if !claude_projects.exists() {
-        return Err(format!(
-            "Claude projects directory not found: {}",
-            claude_projects.display()
-        )
-        .into());
-    }
-
-    Ok(claude_projects)
+    discover_claude_log_roots(None)
+        .into_iter()
+        .next()
+        .ok_or("Claude projects directory not found".into())
 }
 
-fn is_wsl_environment() -> bool {
-    if std::env::var_os("WSL_DISTRO_NAME").is_some() {
-        return true;
-    }
-
-    std::fs::read_to_string("/proc/version")
-        .map(|s| s.to_ascii_lowercase().contains("microsoft"))
-        .unwrap_or(false)
-}
-
-fn wsl_windows_home_candidates() -> Vec<PathBuf> {
-    let mut homes: Vec<PathBuf> = Vec::new();
-    let mut push_home = |path: PathBuf| {
-        if !homes.iter().any(|p| p == &path) {
-            homes.push(path);
-        }
-    };
-
-    if let Some(userprofile) = std::env::var_os("USERPROFILE") {
-        push_home(PathBuf::from(userprofile));
-    }
-
-    if let Ok(entries) = std::fs::read_dir("/mnt/c/Users") {
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.is_dir() {
-                push_home(path);
-            }
-        }
-    }
-
-    homes
-}
-
-/// Returns all project directories under ~/.claude/projects/.
-pub fn list_project_dirs() -> Result<Vec<PathBuf>, super::ParseError> {
-    let base = discover_log_dir()?;
+/// Returns all project directories under one Claude root.
+pub fn list_project_dirs_in_root(base: &Path) -> Result<Vec<PathBuf>, super::ParseError> {
     let mut dirs = Vec::new();
 
-    for entry in std::fs::read_dir(&base)? {
+    for entry in std::fs::read_dir(base)? {
         let entry = entry?;
         let path = entry.path();
         if path.is_dir() {
@@ -304,6 +272,74 @@ pub fn filter_entries_by_date(entries: Vec<LogEntry>, date: NaiveDate) -> Vec<Lo
         .collect()
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum ClaudeEntryFingerprint {
+    User {
+        session_id: String,
+        uuid: String,
+    },
+    Assistant {
+        session_id: String,
+        uuid: String,
+    },
+    Progress {
+        session_id: String,
+        timestamp_millis: i64,
+    },
+    System {
+        session_id: String,
+        timestamp_millis: i64,
+    },
+    FileHistorySnapshot {
+        message_id: String,
+    },
+    Other {
+        value: String,
+    },
+}
+
+fn entry_fingerprint(entry: &LogEntry) -> ClaudeEntryFingerprint {
+    match entry {
+        LogEntry::User(e) => ClaudeEntryFingerprint::User {
+            session_id: e.session_id.clone(),
+            uuid: e.uuid.clone(),
+        },
+        LogEntry::Assistant(e) => ClaudeEntryFingerprint::Assistant {
+            session_id: e.session_id.clone(),
+            uuid: e.uuid.clone(),
+        },
+        LogEntry::Progress(e) => ClaudeEntryFingerprint::Progress {
+            session_id: e.session_id.clone(),
+            timestamp_millis: e.timestamp.timestamp_millis(),
+        },
+        LogEntry::System(e) => ClaudeEntryFingerprint::System {
+            session_id: e.session_id.clone().unwrap_or_default(),
+            timestamp_millis: e.timestamp.timestamp_millis(),
+        },
+        LogEntry::FileHistorySnapshot(e) => ClaudeEntryFingerprint::FileHistorySnapshot {
+            message_id: e.message_id.clone().unwrap_or_default(),
+        },
+        LogEntry::Other(v) => ClaudeEntryFingerprint::Other {
+            value: v.to_string(),
+        },
+    }
+}
+
+/// Dedupe Claude entries by stable per-entry fingerprints.
+pub fn dedupe_entries(entries: Vec<LogEntry>) -> Vec<LogEntry> {
+    let mut seen: HashSet<ClaudeEntryFingerprint> = HashSet::new();
+    let mut deduped = Vec::new();
+
+    for entry in entries {
+        let fingerprint = entry_fingerprint(&entry);
+        if seen.insert(fingerprint) {
+            deduped.push(entry);
+        }
+    }
+
+    deduped
+}
+
 /// Groups parsed entries by session and produces per-session summaries.
 pub fn summarize_entries(entries: &[LogEntry]) -> Vec<SessionSummary> {
     let mut sessions: HashMap<String, SessionSummary> = HashMap::new();
@@ -342,8 +378,7 @@ pub fn summarize_entries(entries: &[LogEntry]) -> Vec<SessionSummary> {
                     if let Some(usage) = &msg.usage {
                         summary.total_input_tokens += usage.input_tokens;
                         summary.total_output_tokens += usage.output_tokens;
-                        summary.total_cache_creation_tokens +=
-                            usage.cache_creation_input_tokens;
+                        summary.total_cache_creation_tokens += usage.cache_creation_input_tokens;
                         summary.total_cache_read_tokens += usage.cache_read_input_tokens;
                     }
                 }
@@ -458,5 +493,52 @@ mod tests {
         let date = NaiveDate::from_ymd_opt(2026, 3, 11).unwrap();
         let filtered = filter_entries_by_date(entries, date);
         assert_eq!(filtered.len(), 1);
+    }
+
+    #[test]
+    fn test_discover_claude_log_roots_keeps_config_priority() {
+        let base = std::env::temp_dir().join(format!(
+            "rwd_test_claude_roots_{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system time")
+                .as_nanos()
+        ));
+        let first = base.join("first");
+        let second = base.join("second");
+        std::fs::create_dir_all(&first).expect("first dir");
+        std::fs::create_dir_all(&second).expect("second dir");
+
+        let overrides = vec![
+            first.to_string_lossy().to_string(),
+            second.to_string_lossy().to_string(),
+            first.to_string_lossy().to_string(),
+        ];
+
+        let roots = discover_claude_log_roots(Some(&overrides));
+        assert!(roots.starts_with(&[first.clone(), second.clone()]));
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_dedupe_entries_uses_session_and_uuid_for_user_entries() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"dup"}"#,
+            )
+            .expect("first"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:05:00Z","uuid":"dup"}"#,
+            )
+            .expect("duplicate"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:10:00Z","uuid":"unique"}"#,
+            )
+            .expect("unique"),
+        ];
+
+        let deduped = dedupe_entries(entries);
+        assert_eq!(deduped.len(), 2);
     }
 }
