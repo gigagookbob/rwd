@@ -193,15 +193,14 @@ pub fn list_session_files_for_date(
     Ok(files)
 }
 
-/// Lists session files for a local date, scanning both the target date
-/// and previous day to handle UTC/local timezone offset.
+/// Lists session files for a local date by deriving the exact UTC date set
+/// touched by the local [00:00, next 00:00) window.
 pub fn list_session_files_for_local_date(
     sessions_dir: &Path,
     local_date: NaiveDate,
 ) -> Result<Vec<PathBuf>, super::ParseError> {
     let mut files = Vec::new();
-    let yesterday = local_date - chrono::Duration::days(1);
-    for date in [yesterday, local_date] {
+    for date in super::utc_dates_for_local_date(local_date)? {
         files.extend(list_session_files_for_date(sessions_dir, date)?);
     }
     Ok(files)
@@ -227,10 +226,20 @@ pub fn entry_timestamp(entry: &CodexEntry) -> Option<DateTime<Utc>> {
 /// SessionMeta entries are always preserved regardless of date, because
 /// they carry session metadata needed by `summarize_codex_entries`.
 pub fn filter_entries_by_local_date(entries: Vec<CodexEntry>, date: NaiveDate) -> Vec<CodexEntry> {
+    let window = super::local_date_to_utc_window(date).ok();
+
     entries
         .into_iter()
         .filter(|entry| {
-            matches!(entry, CodexEntry::SessionMeta { .. }) || entry_local_date(entry) == Some(date)
+            matches!(entry, CodexEntry::SessionMeta { .. })
+                || entry_timestamp(entry).is_some_and(|ts| {
+                    if let Some(window) = window {
+                        window.contains(ts)
+                    } else {
+                        // Fallback if local midnight resolution fails unexpectedly.
+                        ts.with_timezone(&chrono::Local).date_naive() == date
+                    }
+                })
         })
         .collect()
 }
