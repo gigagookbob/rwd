@@ -200,8 +200,10 @@ pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
     ids
 }
 
-/// Pre-computed estimated token count of the system prompt (provider::SYSTEM_PROMPT).
-pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 800;
+/// Conservative estimate for system prompt tokens.
+/// As of 2026-04-12, EN/KO system prompts estimate to ~1194/~1088 tokens via chars/2.
+/// Keep a safety margin to avoid under-estimating planner input size.
+pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 1_300;
 
 /// Rough token estimate for text.
 /// Korean syllables are ~1 token each, so char_count / 2 is a conservative estimate.
@@ -264,6 +266,11 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
 mod tests {
     use super::*;
     use crate::parser::claude::LogEntry;
+
+    const SYSTEM_PROMPT_EN_TEXT: &str = include_str!("../../prompts/system_en.md");
+    const SYSTEM_PROMPT_KO_TEXT: &str = include_str!("../../prompts/system_ko.md");
+    const SLACK_PROMPT_EN_TEXT: &str = include_str!("../../prompts/slack_en.md");
+    const SLACK_PROMPT_KO_TEXT: &str = include_str!("../../prompts/slack_ko.md");
 
     #[test]
     fn test_build_prompt_extracts_user_text() {
@@ -403,5 +410,45 @@ mod tests {
         assert_eq!(estimates[1].session_id, "s2");
         assert!(estimates[0].estimated_tokens > 0);
         assert!(estimates[0].estimated_tokens > 0);
+    }
+
+    #[test]
+    fn test_system_prompt_estimated_tokens_covers_en_prompt() {
+        let estimated = estimate_tokens(SYSTEM_PROMPT_EN_TEXT);
+        assert!(
+            SYSTEM_PROMPT_ESTIMATED_TOKENS >= estimated,
+            "SYSTEM_PROMPT_ESTIMATED_TOKENS={} must be >= EN estimate={estimated}",
+            SYSTEM_PROMPT_ESTIMATED_TOKENS
+        );
+    }
+
+    #[test]
+    fn test_system_prompt_estimated_tokens_covers_ko_prompt() {
+        let estimated = estimate_tokens(SYSTEM_PROMPT_KO_TEXT);
+        assert!(
+            SYSTEM_PROMPT_ESTIMATED_TOKENS >= estimated,
+            "SYSTEM_PROMPT_ESTIMATED_TOKENS={} must be >= KO estimate={estimated}",
+            SYSTEM_PROMPT_ESTIMATED_TOKENS
+        );
+    }
+
+    #[test]
+    fn test_slack_prompt_en_has_structured_guardrails() {
+        assert!(SLACK_PROMPT_EN_TEXT.contains("[Today's Work Update]"));
+        assert!(SLACK_PROMPT_EN_TEXT.contains("4-6"));
+        assert!(SLACK_PROMPT_EN_TEXT.contains("- (Topic)"));
+        assert!(SLACK_PROMPT_EN_TEXT.contains("Merge items that share the same topic"));
+        assert!(SLACK_PROMPT_EN_TEXT.contains("what was done, what improved, what was solved"));
+        assert!(SLACK_PROMPT_EN_TEXT.contains("No internal code/file names/paths"));
+    }
+
+    #[test]
+    fn test_slack_prompt_ko_has_structured_guardrails() {
+        assert!(SLACK_PROMPT_KO_TEXT.contains("[금일 작업 공유]"));
+        assert!(SLACK_PROMPT_KO_TEXT.contains("4-6"));
+        assert!(SLACK_PROMPT_KO_TEXT.contains("- (주제)"));
+        assert!(SLACK_PROMPT_KO_TEXT.contains("같은 주제 항목은 하나의 불릿으로 병합"));
+        assert!(SLACK_PROMPT_KO_TEXT.contains("한 일, 개선점, 해결한 문제"));
+        assert!(SLACK_PROMPT_KO_TEXT.contains("내부 코드/파일명/경로"));
     }
 }
