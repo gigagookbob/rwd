@@ -1,6 +1,6 @@
 [package]
 name = "rwd"
-version = "0.13.7"
+version = "0.13.8"
 edition = "2024"
 description = "CLI tool that analyzes AI coding session logs and extracts daily development insights"
 license = "MIT"
@@ -22,3 +22,7 @@ console = "0.15"
 regex = "1"
 notify-rust = "4"
 semver = "1.0.27"
+indicatif = "0.18"
+
+[dev-dependencies]
+chrono-tz = "0.10"

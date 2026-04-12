@@ -454,22 +454,34 @@ async fn run_today(
     // Reuse previous analysis if the entry count is unchanged.
     if no_cache {
         println!("\n{}", crate::messages::status::CACHE_BYPASSED);
-    } else if let Some(cached) = cache::load_cache(today)
-        && cached.claude_entry_count == claude_count
-        && cached.codex_session_count == codex_session_count
-        && cached.codex_entry_count == codex_entry_count
-    {
-        println!("\n{}", crate::messages::status::CACHE_USED);
-        let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
-            .sources
-            .iter()
-            .map(|(name, result)| (name.as_str(), result))
-            .collect();
-        for (name, analysis) in &source_refs {
-            print_insights(name, analysis);
+    } else if let Some(cached) = cache::load_cache(today) {
+        let count_matches = cached.claude_entry_count == claude_count
+            && cached.codex_session_count == codex_session_count
+            && cached.codex_entry_count == codex_entry_count;
+        let timezone_matches = cache::is_timezone_compatible(&cached, today);
+
+        if count_matches && timezone_matches {
+            println!("\n{}", crate::messages::status::CACHE_USED);
+            let source_refs: Vec<(&str, &analyzer::AnalysisResult)> = cached
+                .sources
+                .iter()
+                .map(|(name, result)| (name.as_str(), result))
+                .collect();
+            for (name, analysis) in &source_refs {
+                print_insights(name, analysis);
+            }
+            save_combined_analysis(&source_refs, today, verbose);
+            return Ok(());
         }
-        save_combined_analysis(&source_refs, today, verbose);
-        return Ok(());
+
+        if count_matches && !timezone_matches {
+            eprintln!(
+                "{YELLOW}{}{RESET}",
+                crate::messages::status::CACHE_STALE_TIMEZONE
+            );
+            eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
+            eprintln!();
+        }
     }
 
     // === LLM analysis ===
@@ -528,6 +540,7 @@ async fn run_today(
             claude_entry_count: claude_count,
             codex_session_count,
             codex_entry_count,
+            timezone_window_key: cache::timezone_window_key(today),
             sources,
         };
         if let Err(e) = cache::save_cache(&cache_data, today) {
@@ -571,7 +584,7 @@ async fn run_summary(
         run_today(false, None, today, true).await?;
     }
 
-    let cached = match cache::load_cache(today) {
+    let mut cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
@@ -585,6 +598,23 @@ async fn run_summary(
             }
         }
     };
+
+    if !cache::is_timezone_compatible(&cached, today) {
+        eprintln!(
+            "{YELLOW}{}{RESET}",
+            crate::messages::status::CACHE_STALE_TIMEZONE
+        );
+        eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
+        eprintln!();
+        run_today(false, None, today, false).await?;
+        cached = match cache::load_cache(today) {
+            Some(c) => c,
+            None => {
+                eprintln!("{}", crate::messages::error::NO_CACHE_AFTER_ANALYSIS);
+                std::process::exit(1);
+            }
+        };
+    }
 
     // Concatenate all session work_summaries with source names for project-level grouping.
     let mut summaries_text = String::new();
@@ -634,7 +664,7 @@ async fn run_slack(
         run_today(false, None, today, true).await?;
     }
 
-    let cached = match cache::load_cache(today) {
+    let mut cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
@@ -648,6 +678,23 @@ async fn run_slack(
             }
         }
     };
+
+    if !cache::is_timezone_compatible(&cached, today) {
+        eprintln!(
+            "{YELLOW}{}{RESET}",
+            crate::messages::status::CACHE_STALE_TIMEZONE
+        );
+        eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
+        eprintln!();
+        run_today(false, None, today, false).await?;
+        cached = match cache::load_cache(today) {
+            Some(c) => c,
+            None => {
+                eprintln!("{}", crate::messages::error::NO_CACHE_AFTER_ANALYSIS);
+                std::process::exit(1);
+            }
+        };
+    }
 
     // Warn if cache is stale (entry count mismatch).
     let mut loaded_config = config::load_config_if_exists();
