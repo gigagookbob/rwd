@@ -283,6 +283,9 @@ pub mod status {
         format!("\u{26A0} Cache is stale. (cached: {cached_total}, current: {current_total})")
     }
 
+    pub const CACHE_STALE_TIMEZONE: &str =
+        "\u{26A0} Cache is stale. (timezone/day boundary changed)";
+
     pub const CACHE_STALE_HINT: &str = "  Run `rwd today` first for up-to-date results.";
 
     pub fn markdown_saved(path: &dyn std::fmt::Display) -> String {
