@@ -259,15 +259,20 @@ pub fn entry_timestamp(entry: &LogEntry) -> Option<DateTime<Utc>> {
 
 /// Filters entries to only those matching the given date (in local timezone).
 pub fn filter_entries_by_date(entries: Vec<LogEntry>, date: NaiveDate) -> Vec<LogEntry> {
+    let window = super::local_date_to_utc_window(date).ok();
+
     entries
         .into_iter()
-        .filter(|entry| {
-            // Convert UTC timestamp to local timezone before date comparison.
-            // This ensures entries are filtered by the user's local date, not UTC.
-            match entry_timestamp(entry) {
-                Some(ts) => ts.with_timezone(&chrono::Local).date_naive() == date,
-                None => false,
+        .filter(|entry| match entry_timestamp(entry) {
+            Some(ts) => {
+                if let Some(window) = window {
+                    window.contains(ts)
+                } else {
+                    // Fallback if local midnight resolution fails unexpectedly.
+                    ts.with_timezone(&chrono::Local).date_naive() == date
+                }
             }
+            None => false,
         })
         .collect()
 }
