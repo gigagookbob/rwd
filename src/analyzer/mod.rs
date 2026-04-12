@@ -27,45 +27,36 @@ use crate::parser::codex::CodexEntry;
 use crate::redactor::RedactResult;
 use planner::{ExecutionPlan, StepStrategy};
 
-/// Starts a terminal spinner on stderr. Abort the returned handle to stop it.
-fn start_spinner(msg: String) -> tokio::task::JoinHandle<()> {
-    use std::io::Write;
-    tokio::spawn(async move {
-        let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-        let mut i = 0;
-        loop {
-            eprint!("\r{} {}", frames[i % frames.len()], msg);
-            let _ = std::io::stderr().flush();
-            i += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(80)).await;
-        }
-    })
+/// Starts a terminal spinner on stderr.
+fn start_spinner(msg: String) -> indicatif::ProgressBar {
+    use indicatif::{ProgressBar, ProgressStyle};
+    use std::time::Duration;
+
+    let spinner = ProgressBar::new_spinner();
+    let style = ProgressStyle::with_template("{spinner} {msg}")
+        .unwrap_or_else(|_| ProgressStyle::default_spinner())
+        .tick_strings(&["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏", ""]);
+    spinner.set_style(style);
+    spinner.set_message(msg);
+    spinner.enable_steady_tick(Duration::from_millis(80));
+    spinner
 }
 
 /// Stops the spinner and clears the line.
-fn stop_spinner(handle: tokio::task::JoinHandle<()>) {
-    handle.abort();
-    eprint!("\r\x1b[2K");
+fn stop_spinner(spinner: indicatif::ProgressBar) {
+    spinner.finish_and_clear();
 }
 
 /// Displays a countdown with spinner animation, updating every second.
 async fn countdown_sleep(total_secs: u64) {
-    use std::io::Write;
-    let frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-    let mut i = 0;
+    use std::time::Duration;
+
+    let spinner = start_spinner(crate::messages::status::countdown_waiting(total_secs));
     for remaining in (1..=total_secs).rev() {
-        for _ in 0..12 {
-            eprint!(
-                "\r{} {}",
-                frames[i % frames.len()],
-                crate::messages::status::countdown_waiting(remaining)
-            );
-            let _ = std::io::stderr().flush();
-            i += 1;
-            tokio::time::sleep(std::time::Duration::from_millis(83)).await;
-        }
+        spinner.set_message(crate::messages::status::countdown_waiting(remaining));
+        tokio::time::sleep(Duration::from_secs(1)).await;
     }
-    eprint!("\r\x1b[2K");
+    stop_spinner(spinner);
 }
 
 /// Main entry point: probes rate limits, plans execution, and runs LLM analysis.
