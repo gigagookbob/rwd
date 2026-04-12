@@ -22,3 +22,6 @@ console = "0.15"
 regex = "1"
 notify-rust = "4"
 semver = "1.0.27"
+
+[dev-dependencies]
+chrono-tz = "0.10"
