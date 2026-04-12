@@ -727,4 +727,50 @@ mod tests {
         let filtered = filter_entries_by_local_date(entries, today_local);
         assert_eq!(filtered.len(), 4);
     }
+
+    #[test]
+    fn test_filter_entries_by_local_date_respects_half_open_window_boundaries() {
+        let date = chrono::NaiveDate::from_ymd_opt(2026, 4, 11).expect("valid date");
+        let window = crate::parser::local_date_to_utc_window(date).expect("utc window");
+
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: window.start_utc,
+                session_id: "s1".to_string(),
+                cwd: "/p".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: window.start_utc - chrono::Duration::nanoseconds(1),
+                text: "before_start".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: window.start_utc,
+                text: "at_start".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: window.end_utc - chrono::Duration::nanoseconds(1),
+                text: "before_end".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: window.end_utc,
+                text: "at_end".to_string(),
+            },
+        ];
+
+        let filtered = filter_entries_by_local_date(entries, date);
+        assert!(matches!(filtered[0], CodexEntry::SessionMeta { .. }));
+
+        let kept_texts: Vec<&str> = filtered
+            .iter()
+            .filter_map(|entry| match entry {
+                CodexEntry::UserMessage { text, .. } | CodexEntry::AssistantMessage { text, .. } => {
+                    Some(text.as_str())
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert_eq!(kept_texts, vec!["at_start", "before_end"]);
+    }
 }
