@@ -29,8 +29,39 @@ pub struct TodayCache {
     /// conversations continue inside existing sessions.
     #[serde(default)]
     pub codex_entry_count: usize,
+    /// Local-day UTC window key for cache safety across timezone changes.
+    ///
+    /// Format: "<start_utc_rfc3339>..<end_utc_rfc3339>".
+    /// Legacy caches may not have this field.
+    #[serde(default)]
+    pub timezone_window_key: Option<String>,
     /// Per-source analysis results.
     pub sources: Vec<(String, AnalysisResult)>,
+}
+
+/// Returns a timezone-aware cache identity for a local date.
+///
+/// The key is derived from the local [00:00, next 00:00) window represented in UTC.
+/// It changes when timezone/daylight-saving rules change.
+pub fn timezone_window_key(date: NaiveDate) -> Option<String> {
+    let window = crate::parser::local_date_to_utc_window(date).ok()?;
+    Some(format!(
+        "{}..{}",
+        window.start_utc.to_rfc3339(),
+        window.end_utc.to_rfc3339()
+    ))
+}
+
+/// Returns whether a cached result is compatible with the current local timezone rules.
+///
+/// Legacy caches without timezone metadata are treated as incompatible when the current
+/// key can be computed, forcing one-time refresh to prevent wrong cache reuse.
+pub fn is_timezone_compatible(cache: &TodayCache, date: NaiveDate) -> bool {
+    match timezone_window_key(date) {
+        Some(current_key) => cache.timezone_window_key.as_deref() == Some(current_key.as_str()),
+        // If the current timezone window cannot be resolved, fall back to existing behavior.
+        None => true,
+    }
 }
 
 /// Returns cache directory path: ~/.rwd/cache/
@@ -98,6 +129,17 @@ fn save_update_check_to(
 mod tests {
     use super::*;
 
+    fn empty_today_cache(date: &str, timezone_window_key: Option<String>) -> TodayCache {
+        TodayCache {
+            date: date.to_string(),
+            claude_entry_count: 0,
+            codex_session_count: 0,
+            codex_entry_count: 0,
+            timezone_window_key,
+            sources: Vec::new(),
+        }
+    }
+
     #[test]
     fn test_update_check_cache_serialize_deserialize_roundtrip() {
         let cache = UpdateCheckCache {
@@ -147,5 +189,36 @@ mod tests {
 }"#;
         let loaded: TodayCache = serde_json::from_str(json).expect("deserialize legacy cache");
         assert_eq!(loaded.codex_entry_count, 0);
+        assert!(loaded.timezone_window_key.is_none());
+    }
+
+    #[test]
+    fn test_timezone_window_key_has_start_and_end() {
+        let date = NaiveDate::from_ymd_opt(2026, 4, 11).expect("valid date");
+        let key = timezone_window_key(date).expect("timezone window key");
+        let parts: Vec<&str> = key.split("..").collect();
+        assert_eq!(parts.len(), 2);
+        assert!(!parts[0].is_empty());
+        assert!(!parts[1].is_empty());
+    }
+
+    #[test]
+    fn test_is_timezone_compatible_requires_timezone_key() {
+        let date = NaiveDate::from_ymd_opt(2026, 4, 11).expect("valid date");
+        let Some(current_key) = timezone_window_key(date) else {
+            // If timezone window resolution fails, compatibility falls back to true by design.
+            let cache = empty_today_cache("2026-04-11", None);
+            assert!(is_timezone_compatible(&cache, date));
+            return;
+        };
+
+        let legacy_cache = empty_today_cache("2026-04-11", None);
+        assert!(!is_timezone_compatible(&legacy_cache, date));
+
+        let compatible_cache = empty_today_cache("2026-04-11", Some(current_key.clone()));
+        assert!(is_timezone_compatible(&compatible_cache, date));
+
+        let incompatible_cache = empty_today_cache("2026-04-11", Some("wrong".to_string()));
+        assert!(!is_timezone_compatible(&incompatible_cache, date));
     }
 }
