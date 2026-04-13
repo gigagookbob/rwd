@@ -55,7 +55,7 @@ pub mod config {
     pub const NAV_HINT: &str =
         "  \u{2191}\u{2193} Navigate \u{00B7} Enter Select \u{00B7} Esc Exit";
     pub const NO_CHANGE: &str = "  No change";
-    pub const USAGE: &str = "Usage: `rwd config` (interactive) or `rwd config <key> <value>` (keys: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning)";
+    pub const USAGE: &str = "Usage: `rwd config` (interactive) or `rwd config <key> <value>` (keys: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning, claude-include-automated)";
 
     pub fn config_saved(path: &dyn std::fmt::Display) -> String {
         format!("Config saved. {path}")
@@ -95,7 +95,7 @@ pub mod config {
 
     pub fn unknown_key(key: &str) -> String {
         format!(
-            "Unknown config key: '{key}'. Available: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning"
+            "Unknown config key: '{key}'. Available: output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning, claude-include-automated"
         )
     }
 
@@ -105,6 +105,14 @@ pub mod config {
 
     pub fn codex_reasoning_changed(value: &str) -> String {
         format!("Codex reasoning effort changed: {value}")
+    }
+
+    pub fn claude_include_automated_changed(enabled: bool) -> String {
+        if enabled {
+            "Claude automated sessions will be included in `rwd today`.".to_string()
+        } else {
+            "Claude automated sessions will be excluded from `rwd today`.".to_string()
+        }
     }
 
     pub fn provider_now_uses(provider: &str, auth_method: &str) -> String {
@@ -546,6 +554,22 @@ pub mod verbose {
 
     pub fn used_roots(source: &str, roots: &str) -> String {
         format!("[discover] {source} roots: {roots}")
+    }
+
+    pub fn claude_session_mix(
+        interactive: usize,
+        automated: usize,
+        include_automated: bool,
+    ) -> String {
+        if include_automated {
+            format!(
+                "[discover] Claude sessions: {interactive} interactive + {automated} automated (included)"
+            )
+        } else {
+            format!(
+                "[discover] Claude sessions: {interactive} interactive + {automated} automated (excluded)"
+            )
+        }
     }
 
     pub fn step_done_detail(

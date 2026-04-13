@@ -48,6 +48,7 @@ async fn main() {
             date,
             background,
             no_cache,
+            include_automated,
             worker,
         } => {
             let target_date = match parse_date_flag(&date) {
@@ -58,7 +59,7 @@ async fn main() {
                 }
             };
             if worker {
-                if let Err(e) = run_worker(lang, target_date, no_cache).await {
+                if let Err(e) = run_worker(lang, target_date, no_cache, include_automated).await {
                     let log_path = worker_log_path();
                     if let Some(parent) = log_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
@@ -71,12 +72,14 @@ async fn main() {
                     std::process::exit(1);
                 }
             } else if background {
-                if let Err(e) = spawn_worker(&lang, &date, no_cache) {
+                if let Err(e) = spawn_worker(&lang, &date, no_cache, include_automated) {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
             } else {
-                if let Err(e) = run_today(verbose, lang, target_date, no_cache).await {
+                if let Err(e) =
+                    run_today(verbose, lang, target_date, no_cache, include_automated).await
+                {
                     eprintln!("Error: {e}");
                     std::process::exit(1);
                 }
@@ -230,6 +233,7 @@ fn spawn_worker(
     lang_flag: &Option<String>,
     date_flag: &Option<String>,
     no_cache: bool,
+    include_automated: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if is_worker_running() {
         println!("{}", crate::messages::background::ALREADY_RUNNING);
@@ -255,6 +259,9 @@ fn spawn_worker(
     }
     if no_cache {
         args.push("--no-cache".to_string());
+    }
+    if include_automated {
+        args.push("--include-automated".to_string());
     }
 
     let child = std::process::Command::new(exe)
@@ -285,6 +292,7 @@ async fn run_worker(
     lang: Option<String>,
     target_date: chrono::NaiveDate,
     no_cache: bool,
+    include_automated: bool,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let lock_path = worker_lock_path();
     if let Some(parent) = lock_path.parent() {
@@ -292,7 +300,7 @@ async fn run_worker(
     }
     std::fs::write(&lock_path, std::process::id().to_string())?;
 
-    let result = run_today(false, lang, target_date, no_cache).await;
+    let result = run_today(false, lang, target_date, no_cache, include_automated).await;
 
     // Always clean up lock file
     let _ = std::fs::remove_file(&lock_path);
@@ -371,6 +379,7 @@ async fn run_today(
     lang_flag: Option<String>,
     target_date: chrono::NaiveDate,
     no_cache: bool,
+    include_automated_flag: bool,
 ) -> Result<(), parser::ParseError> {
     let mut loaded_config = config::load_config_if_exists();
     if loaded_config.is_none() {
@@ -382,10 +391,12 @@ async fn run_today(
         .map_err(|e| -> Box<dyn std::error::Error> { e })?;
 
     let today = target_date;
+    let include_automated =
+        include_automated_flag || claude_include_automated(loaded_config.as_ref());
 
     // === Collect Claude Code logs ===
     let (claude_entries, claude_discovery) =
-        collect_claude_entries_with_stats(today, loaded_config.as_ref());
+        collect_claude_entries_with_stats(today, loaded_config.as_ref(), include_automated);
 
     // === Collect Codex logs ===
     let (codex_sessions, codex_roots) = collect_codex_sessions(today, loaded_config.as_ref());
@@ -403,6 +414,14 @@ async fn run_today(
                 claude_discovery.file_count,
                 claude_discovery.total_entries,
                 claude_entries.len() + codex_entry_count,
+            )
+        );
+        eprintln!(
+            "{}",
+            crate::messages::verbose::claude_session_mix(
+                claude_discovery.claude_interactive_sessions,
+                claude_discovery.claude_automated_sessions,
+                include_automated,
             )
         );
         if !claude_discovery.roots.is_empty() {
@@ -581,14 +600,14 @@ async fn run_summary(
     let today = target_date;
 
     if no_cache {
-        run_today(false, None, today, true).await?;
+        run_today(false, None, today, true, false).await?;
     }
 
     let mut cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None, today, false).await?;
+            run_today(false, None, today, false, false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -606,7 +625,7 @@ async fn run_summary(
         );
         eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
         eprintln!();
-        run_today(false, None, today, false).await?;
+        run_today(false, None, today, false, false).await?;
         cached = match cache::load_cache(today) {
             Some(c) => c,
             None => {
@@ -661,14 +680,14 @@ async fn run_slack(
     let today = target_date;
 
     if no_cache {
-        run_today(false, None, today, true).await?;
+        run_today(false, None, today, true, false).await?;
     }
 
     let mut cached = match cache::load_cache(today) {
         Some(c) => c,
         None => {
             println!("{}", crate::messages::error::NO_CACHE);
-            run_today(false, None, today, false).await?;
+            run_today(false, None, today, false, false).await?;
             match cache::load_cache(today) {
                 Some(c) => c,
                 None => {
@@ -686,7 +705,7 @@ async fn run_slack(
         );
         eprintln!("{}", crate::messages::status::CACHE_STALE_HINT);
         eprintln!();
-        run_today(false, None, today, false).await?;
+        run_today(false, None, today, false, false).await?;
         cached = match cache::load_cache(today) {
             Some(c) => c,
             None => {
@@ -698,7 +717,9 @@ async fn run_slack(
 
     // Warn if cache is stale (entry count mismatch).
     let mut loaded_config = config::load_config_if_exists();
-    let claude_count = collect_claude_entries(today, loaded_config.as_ref()).len();
+    let include_automated = claude_include_automated(loaded_config.as_ref());
+    let claude_count =
+        collect_claude_entries(today, loaded_config.as_ref(), include_automated).len();
     let (codex_sessions, _) = collect_codex_sessions(today, loaded_config.as_ref());
     let codex_session_count = codex_sessions.len();
     let codex_entry_count: usize = codex_sessions
@@ -834,13 +855,27 @@ struct DiscoveryStats {
     project_count: usize,
     file_count: usize,
     total_entries: usize,
+    claude_interactive_sessions: usize,
+    claude_automated_sessions: usize,
     roots: Vec<std::path::PathBuf>,
 }
 
 fn claude_root_overrides(config: Option<&config::Config>) -> Option<&[String]> {
+    config.and_then(|cfg| cfg.input.as_ref()).and_then(|input| {
+        input
+            .claude
+            .as_ref()
+            .and_then(|claude| claude.roots.as_deref())
+            .or(input.claude_roots.as_deref())
+    })
+}
+
+fn claude_include_automated(config: Option<&config::Config>) -> bool {
     config
         .and_then(|cfg| cfg.input.as_ref())
-        .and_then(|input| input.claude_roots.as_deref())
+        .and_then(|input| input.claude.as_ref())
+        .map(|claude| claude.include_automated)
+        .unwrap_or(false)
 }
 
 fn codex_root_overrides(config: Option<&config::Config>) -> Option<&[String]> {
@@ -861,12 +896,15 @@ fn format_roots_for_display(roots: &[std::path::PathBuf]) -> String {
 fn collect_claude_entries_with_stats(
     today: chrono::NaiveDate,
     config: Option<&config::Config>,
+    include_automated: bool,
 ) -> (Vec<parser::claude::LogEntry>, DiscoveryStats) {
     let roots = parser::discover_claude_log_roots(claude_root_overrides(config));
     let mut stats = DiscoveryStats {
         project_count: 0,
         file_count: 0,
         total_entries: 0,
+        claude_interactive_sessions: 0,
+        claude_automated_sessions: 0,
         roots: roots.clone(),
     };
 
@@ -892,8 +930,11 @@ fn collect_claude_entries_with_stats(
             }
         }
     }
-    let mut deduped = parser::dedupe_claude_entries(all_entries);
-    deduped = parser::exclude_sdk_cli_sessions(deduped);
+    let deduped = parser::dedupe_claude_entries(all_entries);
+    let filtered = parser::filter_automated_sessions(deduped, include_automated);
+    stats.claude_interactive_sessions = filtered.counts.interactive;
+    stats.claude_automated_sessions = filtered.counts.automated;
+    let mut deduped = filtered.entries;
     deduped.sort_by(|left, right| {
         match (
             parser::claude::entry_timestamp(left),
@@ -913,8 +954,9 @@ fn collect_claude_entries_with_stats(
 fn collect_claude_entries(
     today: chrono::NaiveDate,
     config: Option<&config::Config>,
+    include_automated: bool,
 ) -> Vec<parser::claude::LogEntry> {
-    collect_claude_entries_with_stats(today, config).0
+    collect_claude_entries_with_stats(today, config, include_automated).0
 }
 
 /// Collects Codex session logs. Returns empty Vec if the sessions directory is missing.
@@ -1344,6 +1386,7 @@ mod tests {
             input: Some(config::InputConfig {
                 codex_roots,
                 claude_roots,
+                claude: None,
             }),
         }
     }
@@ -1383,7 +1426,7 @@ mod tests {
                 root_b.to_string_lossy().to_string(),
             ]),
         );
-        let (entries, stats) = collect_claude_entries_with_stats(date, Some(&cfg));
+        let (entries, stats) = collect_claude_entries_with_stats(date, Some(&cfg), false);
 
         assert!(stats.roots.starts_with(&[root_a.clone(), root_b.clone()]));
         let matching_count = entries

@@ -83,6 +83,7 @@ rwd config openai-api-key sk-...         # Set OpenAI API key directly
 rwd config anthropic-api-key sk-ant-...  # Set Anthropic API key directly
 rwd config codex-model gpt-5.4           # Override Codex model (default: gpt-5.4)
 rwd config codex-reasoning xhigh         # Override Codex reasoning (default: xhigh)
+rwd config claude-include-automated true # Include automated Claude sessions by default
 rwd config lang ko                       # Change output language (en/ko)
 rwd auth status                          # Show provider auth method + credential state
 rwd reset --dry-run                      # Preview reset targets
@@ -103,6 +104,7 @@ enabled = false
 ```bash
 rwd today              # Analyze today's AI sessions → save to Obsidian Daily Notes
 rwd today --lang ko    # Override output language for this run
+rwd today --include-automated  # Include automated Claude sessions for this run
 rwd summary            # Generate progress summary (Markdown) → save + copy to clipboard
 rwd slack              # Generate Slack-ready message → copy to clipboard
 rwd config             # Change settings (interactive menu)
@@ -115,6 +117,15 @@ rwd update             # Update to the latest version
 Update notice env toggles:
 - `RWD_DISABLE_UPDATE_CHECK=1 rwd today` — disable update notice
 - `RWD_FORCE_UPDATE_CHECK=1 cargo run -- today` — force update check even in local dev build
+
+Claude session filtering:
+- Default behavior excludes automated Claude sessions from `rwd today`.
+- Enable globally with:
+```toml
+[input.claude]
+include_automated = true
+```
+- Keep custom Claude roots in either legacy `[input] claude_roots = [...]` or new `[input.claude] roots = [...]`.
 
 ## Release policy (maintainers)
 

@@ -200,10 +200,12 @@ fn check_config_file() -> Result<CheckResult, Box<dyn std::error::Error>> {
 
 fn check_log_roots() -> CheckResult {
     let cfg = crate::config::load_config_if_exists();
-    let claude_overrides = cfg
-        .as_ref()
-        .and_then(|c| c.input.as_ref())
-        .and_then(|i| i.claude_roots.as_deref());
+    let claude_overrides = cfg.as_ref().and_then(|c| c.input.as_ref()).and_then(|i| {
+        i.claude
+            .as_ref()
+            .and_then(|claude| claude.roots.as_deref())
+            .or(i.claude_roots.as_deref())
+    });
     let codex_overrides = cfg
         .as_ref()
         .and_then(|c| c.input.as_ref())
