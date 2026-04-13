@@ -735,7 +735,7 @@ mod tests {
             )
             .expect("prompt automated"),
             serde_json::from_str::<LogEntry>(
-                r#"{"type":"progress","sessionId":"s4","timestamp":"2026-03-11T12:05:00Z","entrypoint":"cli","cwd":"/home/jinwoo/.claude/hooks/post-tool"}"#,
+                r#"{"type":"progress","sessionId":"s4","timestamp":"2026-03-11T12:05:00Z","entrypoint":"cli","cwd":"/home/example/.claude/hooks/post-tool"}"#,
             )
             .expect("cwd automated"),
             serde_json::from_str::<LogEntry>(

@@ -183,6 +183,21 @@ pub mod auth {
 
 /// Error messages used across the application.
 pub mod error {
+    fn sanitize_api_error_body(body: &str) -> String {
+        let trimmed = body.trim();
+        if trimmed.is_empty() {
+            return "<empty body>".to_string();
+        }
+
+        let (redacted, _) = crate::redactor::redact_text(trimmed);
+        const MAX_BODY_CHARS: usize = 240;
+        let mut out: String = redacted.chars().take(MAX_BODY_CHARS).collect();
+        if redacted.chars().count() > MAX_BODY_CHARS {
+            out.push_str("...(truncated)");
+        }
+        out
+    }
+
     pub const NO_CONFIG: &str = "No config found. Run `rwd init` first.";
     pub const NO_CACHE: &str = "No cache found. Running today analysis first...";
     pub const NO_CACHE_AFTER_ANALYSIS: &str = "No cache found even after analysis.";
@@ -214,11 +229,13 @@ pub mod error {
     }
 
     pub fn api_request_failed(status: &dyn std::fmt::Display, body: &str) -> String {
-        format!("API request failed ({status}): {body}")
+        let safe_body = sanitize_api_error_body(body);
+        format!("API request failed ({status}): {safe_body}")
     }
 
     pub fn openai_api_request_failed(status: &dyn std::fmt::Display, body: &str) -> String {
-        format!("OpenAI API request failed ({status}): {body}")
+        let safe_body = sanitize_api_error_body(body);
+        format!("OpenAI API request failed ({status}): {safe_body}")
     }
 
     pub const API_NO_TEXT_BLOCK: &str = "No text block in API response";
@@ -600,5 +617,25 @@ pub mod verbose {
 
     pub fn markdown_file_size(path: &dyn std::fmt::Display, size_kb: f64) -> String {
         format!("Markdown size: {path} ({size_kb:.1} KB)")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::error;
+
+    #[test]
+    fn test_api_request_failed_masks_sensitive_body() {
+        let body = r#"{"error":"invalid key sk-abcdefghijklmnopqrstuvwxyz1234"}"#;
+        let msg = error::api_request_failed(&401, body);
+        assert!(!msg.contains("sk-abcdefghijklmnopqrstuvwxyz1234"));
+        assert!(msg.contains("[REDACTED:API_KEY]"));
+    }
+
+    #[test]
+    fn test_api_request_failed_truncates_long_body() {
+        let long_body = "x".repeat(400);
+        let msg = error::openai_api_request_failed(&500, &long_body);
+        assert!(msg.contains("...(truncated)"));
     }
 }

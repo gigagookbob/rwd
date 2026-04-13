@@ -3,7 +3,7 @@
 다음 세션에서 아래 프롬프트를 그대로 사용한다.
 
 ```text
-/home/jinwoo/workspace/hobby/rwd 레포에서 아래 설계를 구현해줘.
+/home/example/workspace/hobby/rwd 레포에서 아래 설계를 구현해줘.
 
 먼저 이 문서를 읽어:
 - docs/superpowers/specs/2026-04-11-multi-root-agent-session-discovery-design.md
