@@ -893,6 +893,7 @@ fn collect_claude_entries_with_stats(
         }
     }
     let mut deduped = parser::dedupe_claude_entries(all_entries);
+    deduped = parser::exclude_sdk_cli_sessions(deduped);
     deduped.sort_by(|left, right| {
         match (
             parser::claude::entry_timestamp(left),

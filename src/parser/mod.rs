@@ -83,6 +83,7 @@ pub fn utc_dates_for_local_date(local_date: NaiveDate) -> Result<Vec<NaiveDate>,
 pub use claude::{
     dedupe_entries as dedupe_claude_entries, discover_claude_log_roots, filter_entries_by_date,
     list_project_dirs_in_root, list_session_files, parse_jsonl_file, summarize_entries,
+    exclude_sdk_cli_sessions,
 };
 
 #[cfg(test)]
