@@ -155,6 +155,17 @@ pub struct InputConfig {
     pub codex_roots: Option<Vec<String>>,
     #[serde(default)]
     pub claude_roots: Option<Vec<String>>,
+    #[serde(default)]
+    pub claude: Option<ClaudeInputConfig>,
+}
+
+/// Claude-specific input options.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ClaudeInputConfig {
+    #[serde(default)]
+    pub roots: Option<Vec<String>>,
+    #[serde(default)]
+    pub include_automated: bool,
 }
 
 /// Returns the config file path: ~/.config/rwd/config.toml
@@ -411,6 +422,23 @@ pub fn run_config(key: &str, value: &str) -> Result<(), ConfigError> {
             config.lang = Some(lang);
             eprintln!("Language changed: {value}");
         }
+        "claude-include-automated" => {
+            let enabled = parse_bool_toggle(value, "claude-include-automated")?;
+            let input = config.input.get_or_insert(InputConfig {
+                codex_roots: None,
+                claude_roots: None,
+                claude: None,
+            });
+            let claude = input.claude.get_or_insert(ClaudeInputConfig {
+                roots: None,
+                include_automated: false,
+            });
+            claude.include_automated = enabled;
+            eprintln!(
+                "{}",
+                crate::messages::config::claude_include_automated_changed(enabled)
+            );
+        }
         _ => {
             return Err(crate::messages::config::unknown_key(key).into());
         }
@@ -428,6 +456,14 @@ fn parse_codex_model_value(value: &str) -> Option<String> {
         None
     } else {
         Some(trimmed.to_string())
+    }
+}
+
+fn parse_bool_toggle(value: &str, key_name: &str) -> Result<bool, ConfigError> {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "true" | "1" | "yes" | "on" => Ok(true),
+        "false" | "0" | "no" | "off" => Ok(false),
+        _ => Err(format!("Invalid value for `{key_name}`: '{value}'. Use true/false.").into()),
     }
 }
 
@@ -1553,6 +1589,39 @@ claude_roots = ["/home/jinwoo/.claude/projects"]
             input.claude_roots,
             Some(vec!["/home/jinwoo/.claude/projects".to_string()])
         );
+        assert!(input.claude.is_none());
+    }
+
+    #[test]
+    fn test_config_input_parses_nested_claude_options() {
+        let toml_str = r#"
+[llm]
+provider = "anthropic"
+anthropic_api_key = "sk-test"
+
+[output]
+path = "/tmp/vault"
+
+[input.claude]
+roots = ["/mnt/c/Users/jinwoo/.claude/projects"]
+include_automated = true
+"#;
+        let config: Config = toml::from_str(toml_str).expect("parse");
+        let input = config.input.expect("input section");
+        let claude = input.claude.expect("claude section");
+        assert_eq!(
+            claude.roots,
+            Some(vec!["/mnt/c/Users/jinwoo/.claude/projects".to_string()])
+        );
+        assert!(claude.include_automated);
+    }
+
+    #[test]
+    fn test_parse_bool_toggle_accepts_true_false_values() {
+        assert!(parse_bool_toggle("true", "k").expect("true"));
+        assert!(parse_bool_toggle("1", "k").expect("1"));
+        assert!(!parse_bool_toggle("false", "k").expect("false"));
+        assert!(!parse_bool_toggle("off", "k").expect("off"));
     }
 
     #[test]

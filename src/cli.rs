@@ -25,6 +25,7 @@ Examples:
   rwd config provider codex         Switch LLM provider
   rwd config codex-model gpt-5.4    Set Codex model
   rwd config codex-reasoning xhigh  Set Codex reasoning effort
+  rwd config claude-include-automated true  Include automated Claude sessions by default
   rwd config api-key sk-...         Set API key for current provider
   rwd config openai-api-key sk-...  Set OpenAI API key
   rwd config anthropic-api-key ...  Set Anthropic API key
@@ -50,7 +51,8 @@ Examples:
   rwd today --no-cache         Force fresh analysis (ignore cache)
   rwd today -v                 Show detailed execution plan
   rwd today -b                 Run in background, notify when done
-  rwd today --date 2026-04-09  Analyze a specific date")]
+  rwd today --date 2026-04-09  Analyze a specific date
+  rwd today --include-automated  Include automated Claude sessions")]
     Today {
         /// Show detailed execution plan per session
         #[arg(long, short)]
@@ -67,6 +69,9 @@ Examples:
         /// Ignore cache and force fresh analysis
         #[arg(long)]
         no_cache: bool,
+        /// Include automated Claude sessions (default excludes them)
+        #[arg(long)]
+        include_automated: bool,
         /// Internal: run as background worker (hidden from help)
         #[arg(long, hide = true)]
         worker: bool,
@@ -107,9 +112,10 @@ Examples:
   rwd config openai-api-key sk-...  Set OpenAI API key
   rwd config anthropic-api-key ...  Set Anthropic API key
   rwd config codex-model gpt-5.4    Set Codex model
-  rwd config codex-reasoning xhigh  Set Codex reasoning effort")]
+  rwd config codex-reasoning xhigh  Set Codex reasoning effort
+  rwd config claude-include-automated true  Include automated Claude sessions by default")]
     Config {
-        /// Config key (output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning)
+        /// Config key (output-path, provider, api-key, openai-api-key, anthropic-api-key, codex-model, codex-reasoning, claude-include-automated)
         key: Option<String>,
         /// Value to set
         value: Option<String>,
