@@ -40,6 +40,10 @@ pub struct UserEntry {
     pub session_id: String,
     pub uuid: String,
     #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
+    #[serde(default)]
     pub message: Option<serde_json::Value>,
 }
 
@@ -50,6 +54,10 @@ pub struct AssistantEntry {
     pub timestamp: DateTime<Utc>,
     pub session_id: String,
     pub uuid: String,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
     #[serde(default)]
     pub message: Option<AssistantMessage>,
 }
@@ -116,6 +124,10 @@ pub struct Usage {
 pub struct ProgressEntry {
     pub timestamp: DateTime<Utc>,
     pub session_id: String,
+    #[serde(default)]
+    pub entrypoint: Option<String>,
+    #[serde(default)]
+    pub cwd: Option<String>,
 }
 
 /// System entry.
@@ -345,6 +357,127 @@ pub fn dedupe_entries(entries: Vec<LogEntry>) -> Vec<LogEntry> {
     deduped
 }
 
+/// Session counts separated by interaction type.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct SessionClassCounts {
+    pub interactive: usize,
+    pub automated: usize,
+}
+
+/// Result of applying Claude automation session filtering.
+#[derive(Debug, Clone)]
+pub struct SessionFilterResult {
+    pub entries: Vec<LogEntry>,
+    pub counts: SessionClassCounts,
+}
+
+const AUTOMATED_ENTRYPOINTS: &[&str] = &["sdk-cli"];
+const AUTOMATION_PROMPT_HINTS: &[&str] = &["run exactly one bash command"];
+const AUTOMATION_CWD_HINTS: &[&str] = &["/.claude/hooks", "/.claude/hook"];
+
+fn has_automation_hint(text: &str, hints: &[&str]) -> bool {
+    let lower = text.to_ascii_lowercase();
+    hints.iter().any(|hint| lower.contains(hint))
+}
+
+fn message_has_automation_prompt(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::String(text) => has_automation_hint(text, AUTOMATION_PROMPT_HINTS),
+        serde_json::Value::Array(items) => items.iter().any(message_has_automation_prompt),
+        serde_json::Value::Object(map) => map.values().any(message_has_automation_prompt),
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {
+            false
+        }
+    }
+}
+
+fn is_automated_entry(entry: &LogEntry) -> bool {
+    match entry {
+        LogEntry::User(e) => {
+            e.entrypoint
+                .as_deref()
+                .is_some_and(|v| AUTOMATED_ENTRYPOINTS.contains(&v))
+                || e.cwd
+                    .as_deref()
+                    .is_some_and(|cwd| has_automation_hint(cwd, AUTOMATION_CWD_HINTS))
+                || e.message
+                    .as_ref()
+                    .is_some_and(message_has_automation_prompt)
+        }
+        LogEntry::Assistant(e) => {
+            e.entrypoint
+                .as_deref()
+                .is_some_and(|v| AUTOMATED_ENTRYPOINTS.contains(&v))
+                || e.cwd
+                    .as_deref()
+                    .is_some_and(|cwd| has_automation_hint(cwd, AUTOMATION_CWD_HINTS))
+        }
+        LogEntry::Progress(e) => {
+            e.entrypoint
+                .as_deref()
+                .is_some_and(|v| AUTOMATED_ENTRYPOINTS.contains(&v))
+                || e.cwd
+                    .as_deref()
+                    .is_some_and(|cwd| has_automation_hint(cwd, AUTOMATION_CWD_HINTS))
+        }
+        LogEntry::System(_) | LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => false,
+    }
+}
+
+fn entry_session_id(entry: &LogEntry) -> Option<&str> {
+    match entry {
+        LogEntry::User(e) => Some(&e.session_id),
+        LogEntry::Assistant(e) => Some(&e.session_id),
+        LogEntry::Progress(e) => Some(&e.session_id),
+        LogEntry::System(e) => e.session_id.as_deref(),
+        LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
+    }
+}
+
+/// Filters automated Claude sessions from entries unless explicitly included.
+pub fn filter_automated_sessions(
+    entries: Vec<LogEntry>,
+    include_automated: bool,
+) -> SessionFilterResult {
+    let automated_session_ids: HashSet<String> = entries
+        .iter()
+        .filter(|entry| is_automated_entry(entry))
+        .filter_map(entry_session_id)
+        .map(ToString::to_string)
+        .collect();
+
+    let all_session_ids: HashSet<String> = entries
+        .iter()
+        .filter_map(entry_session_id)
+        .map(ToString::to_string)
+        .collect();
+
+    let counts = SessionClassCounts {
+        interactive: all_session_ids
+            .len()
+            .saturating_sub(automated_session_ids.len()),
+        automated: automated_session_ids.len(),
+    };
+
+    let filtered_entries = if include_automated || automated_session_ids.is_empty() {
+        entries
+    } else {
+        entries
+            .into_iter()
+            .filter(|entry| {
+                entry_session_id(entry)
+                    .map(|session_id| !automated_session_ids.contains(session_id))
+                    .unwrap_or(true)
+            })
+            .collect()
+    };
+
+    SessionFilterResult {
+        entries: filtered_entries,
+        counts,
+    }
+}
+
 /// Groups parsed entries by session and produces per-session summaries.
 pub fn summarize_entries(entries: &[LogEntry]) -> Vec<SessionSummary> {
     let mut sessions: HashMap<String, SessionSummary> = HashMap::new();
@@ -545,5 +678,78 @@ mod tests {
 
         let deduped = dedupe_entries(entries);
         assert_eq!(deduped.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_automated_sessions_excludes_sdk_session_by_default() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","entrypoint":"sdk-cli","message":{"content":"Run exactly one Bash command"}}"#,
+            )
+            .expect("sdk user"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-03-11T10:00:10Z","uuid":"a1","entrypoint":"sdk-cli","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}"#,
+            )
+            .expect("sdk assistant"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","entrypoint":"cli","message":{"content":"normal chat"}}"#,
+            )
+            .expect("cli user"),
+        ];
+
+        let filtered = filter_automated_sessions(entries, false);
+        let summaries = summarize_entries(&filtered.entries);
+
+        assert_eq!(filtered.counts.interactive, 1);
+        assert_eq!(filtered.counts.automated, 1);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, "s2");
+    }
+
+    #[test]
+    fn test_filter_automated_sessions_includes_automated_with_flag() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","entrypoint":"sdk-cli"}"#,
+            )
+            .expect("sdk user"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s2","timestamp":"2026-03-11T11:00:00Z","uuid":"u2","entrypoint":"cli"}"#,
+            )
+            .expect("cli user"),
+        ];
+
+        let filtered = filter_automated_sessions(entries, true);
+        let summaries = summarize_entries(&filtered.entries);
+
+        assert_eq!(filtered.counts.interactive, 1);
+        assert_eq!(filtered.counts.automated, 1);
+        assert_eq!(summaries.len(), 2);
+    }
+
+    #[test]
+    fn test_filter_automated_sessions_detects_prompt_and_cwd_signals() {
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s3","timestamp":"2026-03-11T12:00:00Z","uuid":"u3","entrypoint":"cli","message":{"content":"Run exactly one Bash command and return output only."}}"#,
+            )
+            .expect("prompt automated"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"progress","sessionId":"s4","timestamp":"2026-03-11T12:05:00Z","entrypoint":"cli","cwd":"/home/jinwoo/.claude/hooks/post-tool"}"#,
+            )
+            .expect("cwd automated"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"s5","timestamp":"2026-03-11T12:10:00Z","uuid":"u5","entrypoint":"cli","message":{"content":"normal chat"}}"#,
+            )
+            .expect("interactive"),
+        ];
+
+        let filtered = filter_automated_sessions(entries, false);
+        let summaries = summarize_entries(&filtered.entries);
+
+        assert_eq!(filtered.counts.interactive, 1);
+        assert_eq!(filtered.counts.automated, 2);
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, "s5");
     }
 }

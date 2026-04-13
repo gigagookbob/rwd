@@ -31,7 +31,14 @@ fn utc_window_for_date_in_timezone<Tz: TimeZone>(
     timezone: &Tz,
 ) -> Result<UtcDateWindow, ParseError> {
     let local_start = timezone
-        .with_ymd_and_hms(local_date.year(), local_date.month(), local_date.day(), 0, 0, 0)
+        .with_ymd_and_hms(
+            local_date.year(),
+            local_date.month(),
+            local_date.day(),
+            0,
+            0,
+            0,
+        )
         .earliest()
         .ok_or_else(|| format!("Could not resolve local midnight for {local_date}"))?;
 
@@ -40,7 +47,14 @@ fn utc_window_for_date_in_timezone<Tz: TimeZone>(
         .ok_or_else(|| format!("Could not compute next date from {local_date}"))?;
 
     let local_end = timezone
-        .with_ymd_and_hms(next_date.year(), next_date.month(), next_date.day(), 0, 0, 0)
+        .with_ymd_and_hms(
+            next_date.year(),
+            next_date.month(),
+            next_date.day(),
+            0,
+            0,
+            0,
+        )
         .earliest()
         .ok_or_else(|| format!("Could not resolve local midnight for {next_date}"))?;
 
@@ -81,8 +95,9 @@ pub fn utc_dates_for_local_date(local_date: NaiveDate) -> Result<Vec<NaiveDate>,
 }
 
 pub use claude::{
-    dedupe_entries as dedupe_claude_entries, discover_claude_log_roots, filter_entries_by_date,
-    list_project_dirs_in_root, list_session_files, parse_jsonl_file, summarize_entries,
+    dedupe_entries as dedupe_claude_entries, discover_claude_log_roots, filter_automated_sessions,
+    filter_entries_by_date, list_project_dirs_in_root, list_session_files, parse_jsonl_file,
+    summarize_entries,
 };
 
 #[cfg(test)]
