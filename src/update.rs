@@ -18,8 +18,17 @@ fn is_newer(latest: &str, current: &str) -> bool {
 }
 
 fn is_local_dev_binary(current_exe: &Path) -> bool {
-    let manifest_target = Path::new(env!("CARGO_MANIFEST_DIR")).join("target");
-    current_exe.starts_with(manifest_target)
+    // Avoid embedding build-machine absolute paths via `env!("CARGO_MANIFEST_DIR")`.
+    // A local cargo binary path usually includes `.../target/{debug|release}/...`.
+    let mut prev_was_target = false;
+    for component in current_exe.components() {
+        let name = component.as_os_str().to_string_lossy();
+        if prev_was_target && (name == "debug" || name == "release") {
+            return true;
+        }
+        prev_was_target = name == "target";
+    }
+    false
 }
 
 fn should_skip_update_notice(current_exe: &Path) -> bool {
@@ -537,11 +546,8 @@ mod tests {
 
     #[test]
     fn local_dev_binary_detects_manifest_target_path() {
-        let current = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("target")
-            .join("debug")
-            .join("rwd");
-        assert!(super::is_local_dev_binary(&current));
+        let current = std::path::Path::new("/tmp/example/target/debug/rwd");
+        assert!(super::is_local_dev_binary(current));
     }
 
     #[test]

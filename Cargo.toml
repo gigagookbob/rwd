@@ -26,3 +26,6 @@ indicatif = "0.18"
 
 [dev-dependencies]
 chrono-tz = "0.10"
+
+[profile.release]
+strip = "debuginfo"
