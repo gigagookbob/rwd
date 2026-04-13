@@ -61,7 +61,7 @@
 - `docs/LEARNING_GUIDE.md`
 
 ### Create (Private, not in repo)
-- `~/.claude/projects/-Users-jinwoohan-workspace-repos-company-zerorder-rwd/CLAUDE.md` — Korean personal preferences
+- `~/.claude/projects/-Users-example-workspace-repos-company-example-rwd/CLAUDE.md` — Korean personal preferences
 
 ---
 
@@ -794,7 +794,7 @@ git commit -m "docs: translate all documentation to English"
 **Files:**
 - Rewrite: `CLAUDE.md` (repo root)
 - Modify: `Cargo.toml` (description)
-- Create: `~/.claude/projects/-Users-jinwoohan-workspace-repos-company-zerorder-rwd/CLAUDE.md` (private, Korean)
+- Create: `~/.claude/projects/-Users-example-workspace-repos-company-example-rwd/CLAUDE.md` (private, Korean)
 
 - [ ] **Step 1: Rewrite repo `CLAUDE.md` in English**
 
@@ -833,7 +833,7 @@ description = "CLI tool that analyzes AI coding session logs and extracts daily 
 
 - [ ] **Step 3: Create private Korean CLAUDE.md**
 
-Write to `~/.claude/projects/-Users-jinwoohan-workspace-repos-company-zerorder-rwd/CLAUDE.md`:
+Write to `~/.claude/projects/-Users-example-workspace-repos-company-example-rwd/CLAUDE.md`:
 
 ```markdown
 # Personal Preferences

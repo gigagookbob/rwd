@@ -64,7 +64,9 @@ async fn main() {
                     if let Some(parent) = log_path.parent() {
                         let _ = std::fs::create_dir_all(parent);
                     }
-                    let _ = std::fs::write(&log_path, format!("{e}"));
+                    let error_text = format!("{e}");
+                    let (redacted_error, _) = redactor::redact_text(&error_text);
+                    let _ = std::fs::write(&log_path, redacted_error);
                     send_notification(
                         crate::messages::background::NOTIFY_TITLE,
                         &crate::messages::background::notify_failure(&log_path.display()),

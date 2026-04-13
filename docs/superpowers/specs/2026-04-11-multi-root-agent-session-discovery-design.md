@@ -11,14 +11,14 @@
 
 ### 실제로 문제가 되는 시나리오
 
-1. WSL CLI로 작업한 Codex 세션은 `/home/jinwoo/.codex/sessions`에 쌓임
-2. Codex Desktop App 세션은 `/mnt/c/Users/qew85/.codex/sessions`에 쌓임
+1. WSL CLI로 작업한 Codex 세션은 `/home/example/.codex/sessions`에 쌓임
+2. Codex Desktop App 세션은 `/mnt/c/Users/example/.codex/sessions`에 쌓임
 3. 두 경로가 모두 존재하면 현재 구현은 `/home/...`만 읽고 `/mnt/...`는 무시함
 4. 결과적으로 `rwd today`가 오늘의 실제 작업 일부를 놓침
 
 Claude Code도 같은 문제가 생길 수 있다.
 
-1. WSL 안에서 Claude CLI를 사용하면 `/home/jinwoo/.claude/projects`
+1. WSL 안에서 Claude CLI를 사용하면 `/home/example/.claude/projects`
 2. Windows 쪽 Claude 환경을 WSL에서 읽으면 `/mnt/c/Users/.../.claude/projects`
 3. 두 경로가 동시에 존재할 수 있음
 
@@ -84,12 +84,12 @@ Claude 예시:
 ```toml
 [input]
 codex_roots = [
-  "/home/jinwoo/.codex/sessions",
-  "/mnt/c/Users/qew85/.codex/sessions",
+  "/home/example/.codex/sessions",
+  "/mnt/c/Users/example/.codex/sessions",
 ]
 claude_roots = [
-  "/home/jinwoo/.claude/projects",
-  "/mnt/c/Users/qew85/.claude/projects",
+  "/home/example/.claude/projects",
+  "/mnt/c/Users/example/.claude/projects",
 ]
 ```
 

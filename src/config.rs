@@ -1573,21 +1573,21 @@ anthropic_api_key = "sk-test"
 path = "/tmp/vault"
 
 [input]
-codex_roots = ["/home/jinwoo/.codex/sessions", "/mnt/c/Users/jinwoo/.codex/sessions"]
-claude_roots = ["/home/jinwoo/.claude/projects"]
+codex_roots = ["/home/example/.codex/sessions", "/mnt/c/Users/example/.codex/sessions"]
+claude_roots = ["/home/example/.claude/projects"]
 "#;
         let config: Config = toml::from_str(toml_str).expect("parse");
         let input = config.input.expect("input section");
         assert_eq!(
             input.codex_roots,
             Some(vec![
-                "/home/jinwoo/.codex/sessions".to_string(),
-                "/mnt/c/Users/jinwoo/.codex/sessions".to_string()
+                "/home/example/.codex/sessions".to_string(),
+                "/mnt/c/Users/example/.codex/sessions".to_string()
             ])
         );
         assert_eq!(
             input.claude_roots,
-            Some(vec!["/home/jinwoo/.claude/projects".to_string()])
+            Some(vec!["/home/example/.claude/projects".to_string()])
         );
         assert!(input.claude.is_none());
     }
@@ -1603,7 +1603,7 @@ anthropic_api_key = "sk-test"
 path = "/tmp/vault"
 
 [input.claude]
-roots = ["/mnt/c/Users/jinwoo/.claude/projects"]
+roots = ["/mnt/c/Users/example/.claude/projects"]
 include_automated = true
 "#;
         let config: Config = toml::from_str(toml_str).expect("parse");
@@ -1611,7 +1611,7 @@ include_automated = true
         let claude = input.claude.expect("claude section");
         assert_eq!(
             claude.roots,
-            Some(vec!["/mnt/c/Users/jinwoo/.claude/projects".to_string()])
+            Some(vec!["/mnt/c/Users/example/.claude/projects".to_string()])
         );
         assert!(claude.include_automated);
     }
