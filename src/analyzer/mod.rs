@@ -154,7 +154,7 @@ pub async fn analyze_entries(
         let (final_prompt, redact_result) = if redactor_enabled {
             crate::redactor::redact_text(&prompt_text)
         } else {
-            (prompt_text, RedactResult::empty())
+            (prompt_text.clone(), RedactResult::empty())
         };
         let (raw_response, usage) = provider
             .call_api(
@@ -176,7 +176,31 @@ pub async fn analyze_entries(
                 )
             );
         }
-        let result = insight::parse_response(&raw_response)?;
+        let result = match insight::parse_response(&raw_response) {
+            Ok(result) => result,
+            Err(parse_err)
+                if parse_err
+                    .to_string()
+                    .contains(crate::messages::error::JSON_PARSE_FAILED_MARKER) =>
+            {
+                let hinted = format!("{JSON_RETRY_PREFIX}{prompt_text}");
+                let retry_prompt = if redactor_enabled {
+                    crate::redactor::redact_text(&hinted).0
+                } else {
+                    hinted
+                };
+                let (retry_raw_response, _retry_usage) = provider
+                    .call_api(
+                        &api_key,
+                        &retry_prompt,
+                        plan.recommended_max_tokens as u32,
+                        lang,
+                    )
+                    .await?;
+                insight::parse_response(&retry_raw_response)?
+            }
+            Err(parse_err) => return Err(parse_err),
+        };
         Ok((result, redact_result))
     } else {
         execute_plan(
