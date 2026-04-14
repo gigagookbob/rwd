@@ -20,7 +20,7 @@ rwd answers **"What did I decide today, and why?"** — it extracts decisions, c
 
 ## Installation
 
-### One-line install (macOS Apple Silicon / Linux x86_64)
+### One-line install (macOS / Linux / WSL2)
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
@@ -35,10 +35,12 @@ cargo uninstall rwd
 sudo rm /usr/local/bin/rwd
 ```
 
-### One-line install (Windows)
+Native Windows is not supported.
 
-```powershell
-irm https://raw.githubusercontent.com/gigagookbob/rwd/main/install.ps1 | iex
+If you're on Windows, install WSL2 first, open a Linux shell (for example Ubuntu), then run:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/gigagookbob/rwd/main/install.sh | bash
 ```
 
 ### Build from source
@@ -50,8 +52,8 @@ cargo install --git https://github.com/gigagookbob/rwd.git
 ### Prebuilt binary targets
 
 - `aarch64-apple-darwin` (macOS Apple Silicon)
+- `x86_64-apple-darwin` (macOS Intel)
 - `x86_64-unknown-linux-gnu` (Linux x86_64)
-- `x86_64-pc-windows-msvc` (Windows x86_64)
 
 > If macOS shows "unidentified developer" warning:
 > ```bash

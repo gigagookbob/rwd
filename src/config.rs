@@ -1233,7 +1233,6 @@ pub async fn run_config_interactive() -> Result<(), ConfigError> {
 
 /// Reads vault path from Obsidian's app config (obsidian.json).
 /// macOS:   ~/Library/Application Support/obsidian/obsidian.json
-/// Windows: %APPDATA%/obsidian/obsidian.json
 /// Linux:   ~/.config/obsidian/obsidian.json
 fn detect_vault_from_obsidian_json() -> Option<PathBuf> {
     let mut json_paths: Vec<PathBuf> = Vec::new();
@@ -1251,8 +1250,6 @@ fn detect_vault_from_obsidian_json() -> Option<PathBuf> {
                 .join("obsidian")
                 .join("obsidian.json"),
         );
-    } else if cfg!(target_os = "windows") {
-        push_candidate(dirs::config_dir()?.join("obsidian").join("obsidian.json"));
     } else {
         push_candidate(
             dirs::home_dir()?

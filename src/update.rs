@@ -106,9 +106,6 @@ fn print_update_notice(latest_version: &str) {
 
 /// Performs self-update: fetch latest binary from GitHub and replace current executable.
 pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
-    // Clean up leftover .old binary from previous rename-based updates
-    cleanup_old_binary();
-
     let latest = check_latest_version().await?;
 
     let current_exe = std::env::current_exe()?;
@@ -160,20 +157,12 @@ pub async fn run_update() -> Result<(), Box<dyn std::error::Error>> {
     // Find extracted binary
     let extracted = find_binary_in_dir(&tmp_dir)?;
 
-    // Update cache before potential process exit (Windows deferred path)
+    // Update cache after successful download/extraction.
     let cache = crate::cache::UpdateCheckCache {
         checked_at: chrono::Utc::now(),
         latest_version: latest.clone(),
     };
     let _ = crate::cache::save_update_check(&cache);
-
-    // On Windows, spawn a helper script and exit so the file lock is released.
-    #[cfg(windows)]
-    {
-        schedule_deferred_replace(&extracted, &current_exe, &latest)?;
-        eprintln!("{}", crate::messages::update::update_deferred(&latest));
-        std::process::exit(0);
-    }
 
     // On Unix, replace in-place.
     #[cfg(unix)]
@@ -206,48 +195,29 @@ fn detect_asset_name() -> Result<String, Box<dyn std::error::Error>> {
         ("macos", "aarch64") => "rwd-aarch64-apple-darwin.tar.gz",
         ("macos", "x86_64") => "rwd-x86_64-apple-darwin.tar.gz",
         ("linux", "x86_64") => "rwd-x86_64-unknown-linux-gnu.tar.gz",
-        ("windows", "x86_64") => "rwd-x86_64-pc-windows-msvc.zip",
         _ => return Err(crate::messages::error::unsupported_platform(os, arch).into()),
     };
     Ok(name.to_string())
 }
 
-/// Extracts the downloaded archive (tar.gz on Unix, zip on Windows).
+/// Extracts the downloaded tar.gz archive.
 fn extract_archive(
     archive: &std::path::Path,
     dest: &std::path::Path,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let archive_str = archive.to_string_lossy();
-
-    if archive_str.ends_with(".zip") {
-        let status = std::process::Command::new("powershell")
-            .args([
-                "-NoProfile",
-                "-Command",
-                &format!(
-                    "Expand-Archive -Path '{}' -DestinationPath '{}' -Force",
-                    archive_str,
-                    dest.to_string_lossy()
-                ),
-            ])
-            .status()?;
-        if !status.success() {
-            return Err(crate::messages::error::EXTRACT_FAILED.into());
-        }
-    } else {
-        let status = std::process::Command::new("tar")
-            .args(["-xzf", &archive_str, "-C", &dest.to_string_lossy()])
-            .status()?;
-        if !status.success() {
-            return Err(crate::messages::error::EXTRACT_FAILED.into());
-        }
+    let status = std::process::Command::new("tar")
+        .args(["-xzf", &archive_str, "-C", &dest.to_string_lossy()])
+        .status()?;
+    if !status.success() {
+        return Err(crate::messages::error::EXTRACT_FAILED.into());
     }
     Ok(())
 }
 
 /// Finds the rwd binary in a directory.
 fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    let binary_name = if cfg!(windows) { "rwd.exe" } else { "rwd" };
+    let binary_name = "rwd";
     for entry in std::fs::read_dir(dir)?.flatten() {
         let path = entry.path();
         let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("");
@@ -256,64 +226,6 @@ fn find_binary_in_dir(dir: &std::path::Path) -> Result<PathBuf, Box<dyn std::err
         }
     }
     Err(crate::messages::error::BINARY_NOT_FOUND.into())
-}
-
-/// Cleans up leftover `.old` binary from a previous rename-based update.
-fn cleanup_old_binary() {
-    let Ok(current_exe) = std::env::current_exe() else {
-        return;
-    };
-    let old_path = current_exe.with_extension("exe.old");
-    if old_path.exists() {
-        std::fs::remove_file(&old_path).ok();
-    }
-}
-
-/// Windows: writes a batch script that waits for the file lock to release,
-/// then copies the new binary. The script runs after rwd exits.
-#[cfg(windows)]
-fn schedule_deferred_replace(
-    new_binary: &std::path::Path,
-    target: &std::path::Path,
-    version: &str,
-) -> Result<(), Box<dyn std::error::Error>> {
-    use std::os::windows::process::CommandExt;
-
-    let tmp_dir = new_binary.parent().ok_or("cannot resolve temp directory")?;
-    let script_path = std::env::temp_dir().join("rwd_update.cmd");
-
-    let script = format!(
-        "@echo off\r\n\
-         set retries=0\r\n\
-         :retry\r\n\
-         timeout /t 1 /nobreak >nul\r\n\
-         copy /y \"{source}\" \"{target}\" >nul 2>&1\r\n\
-         if errorlevel 1 (\r\n\
-             set /a retries+=1\r\n\
-             if %retries% geq 30 (\r\n\
-                 echo rwd update failed: could not replace binary after 30s.\r\n\
-                 goto cleanup\r\n\
-             )\r\n\
-             goto retry\r\n\
-         )\r\n\
-         echo rwd v{version} update complete!\r\n\
-         :cleanup\r\n\
-         rmdir /s /q \"{tmp_dir}\" >nul 2>&1\r\n\
-         del \"%~f0\" >nul 2>&1\r\n",
-        source = new_binary.display(),
-        target = target.display(),
-        version = version,
-        tmp_dir = tmp_dir.display(),
-    );
-    std::fs::write(&script_path, &script)?;
-
-    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-    std::process::Command::new("cmd")
-        .args(["/C", &script_path.to_string_lossy()])
-        .creation_flags(CREATE_NO_WINDOW)
-        .spawn()?;
-
-    Ok(())
 }
 
 /// Unix: replaces the current binary in-place, with sudo fallback.

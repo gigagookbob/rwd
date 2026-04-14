@@ -94,7 +94,7 @@ fn visible_rwd_binaries() -> Vec<PathBuf> {
 }
 
 fn binary_name() -> &'static str {
-    if cfg!(windows) { "rwd.exe" } else { "rwd" }
+    "rwd"
 }
 
 fn normalized_path(path: &Path) -> PathBuf {
@@ -108,16 +108,10 @@ fn cleanup_command_for_duplicate(path: &Path) -> String {
             return "sudo rm /usr/local/bin/rwd".to_string();
         }
     }
-    if path.to_string_lossy().ends_with(".cargo/bin/rwd")
-        || path.to_string_lossy().ends_with(".cargo\\bin\\rwd.exe")
-    {
+    if path.to_string_lossy().ends_with(".cargo/bin/rwd") {
         return "cargo uninstall rwd".to_string();
     }
-    if cfg!(windows) {
-        format!("del {}", path.display())
-    } else {
-        format!("rm {}", path.display())
-    }
+    format!("rm {}", path.display())
 }
 
 fn check_update_write_access(

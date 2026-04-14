@@ -11,7 +11,7 @@ CLI tool that analyzes AI coding session logs and extracts daily development ins
 
 ## MUST DO
 
-- Cross-platform: 파일 I/O, 프로세스, 터미널 입력, config 경로 변경 시 Windows/macOS/Linux 동작 차이 확인
+- Cross-platform: 파일 I/O, 프로세스, 터미널 입력, config 경로 변경 시 Linux/macOS/WSL2 동작 차이 확인
 - Validate with `cargo build`, `cargo clippy`, `cargo test` after changes
 - Use `Result` and `?` operator for error handling (no `unwrap()` in non-test code)
 - Use Context7 MCP to reference crate APIs before writing code

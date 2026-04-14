@@ -9,6 +9,11 @@ mod parser;
 mod redactor;
 mod update;
 
+#[cfg(target_os = "windows")]
+compile_error!(
+    "Native Windows is not supported. Please install WSL2 and run rwd in a Linux environment."
+);
+
 use clap::Parser;
 use cli::{AuthAction, Commands};
 
@@ -201,15 +206,6 @@ fn is_process_alive(pid: u32) -> bool {
         .stderr(std::process::Stdio::null())
         .status()
         .map(|s| s.success())
-        .unwrap_or(false)
-}
-
-#[cfg(windows)]
-fn is_process_alive(pid: u32) -> bool {
-    std::process::Command::new("tasklist")
-        .args(["/FI", &format!("PID eq {pid}"), "/NH"])
-        .output()
-        .map(|o| String::from_utf8_lossy(&o.stdout).contains(&pid.to_string()))
         .unwrap_or(false)
 }
 
