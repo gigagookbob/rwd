@@ -1072,16 +1072,7 @@ fn claude_latest_time(
 fn codex_earliest_time(
     sessions: &[CodexCollectedSession],
 ) -> Option<chrono::DateTime<chrono::Local>> {
-    sessions
-        .iter()
-        .flat_map(|(_, entries)| entries.iter())
-        .filter_map(|e| match e {
-            parser::codex::CodexEntry::SessionMeta { timestamp, .. }
-            | parser::codex::CodexEntry::UserMessage { timestamp, .. }
-            | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
-            | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
-            parser::codex::CodexEntry::Other => None,
-        })
+    codex_activity_timestamps(sessions)
         .min()
         .map(|ts| ts.with_timezone(&chrono::Local))
 }
@@ -1090,18 +1081,26 @@ fn codex_earliest_time(
 fn codex_latest_time(
     sessions: &[CodexCollectedSession],
 ) -> Option<chrono::DateTime<chrono::Local>> {
+    codex_activity_timestamps(sessions)
+        .max()
+        .map(|ts| ts.with_timezone(&chrono::Local))
+}
+
+/// Returns UTC timestamps for Codex activity entries (excluding SessionMeta).
+fn codex_activity_timestamps(
+    sessions: &[CodexCollectedSession],
+) -> impl Iterator<Item = chrono::DateTime<chrono::Utc>> + '_ {
     sessions
         .iter()
         .flat_map(|(_, entries)| entries.iter())
         .filter_map(|e| match e {
-            parser::codex::CodexEntry::SessionMeta { timestamp, .. }
-            | parser::codex::CodexEntry::UserMessage { timestamp, .. }
+            parser::codex::CodexEntry::UserMessage { timestamp, .. }
             | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
             | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
-            parser::codex::CodexEntry::Other => None,
+            parser::codex::CodexEntry::SessionMeta { .. } | parser::codex::CodexEntry::Other => {
+                None
+            }
         })
-        .max()
-        .map(|ts| ts.with_timezone(&chrono::Local))
 }
 
 /// Computes total token counts from Claude session summaries: (total_in, total_out).
@@ -1361,6 +1360,7 @@ fn print_insights(source_name: &str, analysis: &analyzer::AnalysisResult) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use chrono::TimeZone;
     use std::io::Write;
 
     fn test_config(
@@ -1499,5 +1499,58 @@ mod tests {
         assert_eq!(summary.assistant_count, 1);
 
         std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_codex_time_range_ignores_previous_day_session_meta() {
+        let session_meta_ts = chrono::Local
+            .with_ymd_and_hms(2099, 1, 1, 23, 28, 0)
+            .earliest()
+            .expect("session meta local time")
+            .with_timezone(&chrono::Utc);
+        let first_activity_ts = chrono::Local
+            .with_ymd_and_hms(2099, 1, 2, 0, 10, 0)
+            .earliest()
+            .expect("first activity local time")
+            .with_timezone(&chrono::Utc);
+        let last_activity_ts = chrono::Local
+            .with_ymd_and_hms(2099, 1, 2, 20, 44, 0)
+            .earliest()
+            .expect("last activity local time")
+            .with_timezone(&chrono::Utc);
+
+        let summary = parser::codex::CodexSessionSummary {
+            session_id: "s1".to_string(),
+            cwd: "/tmp".to_string(),
+            model_provider: "openai".to_string(),
+            user_count: 1,
+            assistant_count: 1,
+            function_call_count: 0,
+        };
+        let sessions = vec![(
+            summary,
+            vec![
+                parser::codex::CodexEntry::SessionMeta {
+                    timestamp: session_meta_ts,
+                    session_id: "s1".to_string(),
+                    cwd: "/tmp".to_string(),
+                    model_provider: "openai".to_string(),
+                },
+                parser::codex::CodexEntry::UserMessage {
+                    timestamp: first_activity_ts,
+                    text: "hello".to_string(),
+                },
+                parser::codex::CodexEntry::AssistantMessage {
+                    timestamp: last_activity_ts,
+                    text: "done".to_string(),
+                },
+            ],
+        )];
+
+        let earliest = codex_earliest_time(&sessions).expect("earliest");
+        let latest = codex_latest_time(&sessions).expect("latest");
+
+        assert_eq!(earliest.format("%H:%M").to_string(), "00:10");
+        assert_eq!(latest.format("%H:%M").to_string(), "20:44");
     }
 }
