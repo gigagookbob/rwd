@@ -294,7 +294,6 @@ pub mod status {
     pub const SLACK_GENERATING: &str = "Generating Slack message...";
     pub const COPIED_TO_CLIPBOARD: &str = "Copied to clipboard.";
     pub const PROBING_RATE_LIMITS: &str = "Checking API rate limits...";
-    pub const ANALYZING_INSIGHT: &str = "Analyzing insights...";
 
     pub fn analyzing(provider: &str) -> String {
         format!("Analyzing insights via {provider}...")
@@ -337,41 +336,6 @@ pub mod status {
         format!("\u{2713} [{i}/{total}] Done")
     }
 
-    pub fn step_retry_success(i: usize, total: usize) -> String {
-        format!("\u{2713} [{i}/{total}] Retry succeeded")
-    }
-
-    pub fn step_reanalysis_success(i: usize, total: usize) -> String {
-        format!("\u{2713} [{i}/{total}] Re-analysis succeeded")
-    }
-
-    pub fn step_skip(
-        i: usize,
-        total: usize,
-        session_id: &str,
-        reason: &dyn std::fmt::Display,
-    ) -> String {
-        format!("\u{26A0} [{i}/{total}] {session_id} skipped: {reason}")
-    }
-
-    pub fn step_skip_retry(
-        i: usize,
-        total: usize,
-        session_id: &str,
-        reason: &dyn std::fmt::Display,
-    ) -> String {
-        format!("\u{26A0} [{i}/{total}] {session_id} skipped (retry failed): {reason}")
-    }
-
-    pub fn step_skip_reanalysis(
-        i: usize,
-        total: usize,
-        session_id: &str,
-        reason: &dyn std::fmt::Display,
-    ) -> String {
-        format!("\u{26A0} [{i}/{total}] {session_id} skipped (re-analysis failed): {reason}")
-    }
-
     pub fn chunk_summarizing(i: usize, total: usize) -> String {
         format!("Summarizing chunk {i}/{total}...")
     }
@@ -380,12 +344,8 @@ pub mod status {
         format!("    \u{2713} Chunk {i}/{total} done")
     }
 
-    pub fn plan_single_shot(estimated_tokens: u64) -> String {
-        format!("\u{2713} Analyzing full log in one pass (est. {estimated_tokens} tokens)")
-    }
-
     pub fn plan_multi_step(steps: usize, total_tokens: u64) -> String {
-        format!("\u{2713} Analyzing {steps} sessions sequentially (est. {total_tokens} tokens)")
+        format!("\u{2713} Analyzing {steps} sessions (est. {total_tokens} tokens)")
     }
 
     pub fn plan_step_direct(session_id: &str, tokens: u64) -> String {
@@ -600,10 +560,6 @@ pub mod verbose {
                 session_id
             },
         )
-    }
-
-    pub fn api_done_single(secs: f64, input: u64, output: u64) -> String {
-        format!("\u{2713} Done in {secs:.1}s (input: {input} / output: {output})")
     }
 
     pub fn cache_saved(path: &dyn std::fmt::Display, size_kb: f64) -> String {
