@@ -36,6 +36,14 @@ echo "Installing rwd ${VERSION}..."
 ARCH=$(uname -m)
 OS=$(uname -s)
 
+case "$OS" in
+    MINGW*|MSYS*|CYGWIN*|Windows_NT)
+        echo "Error: Native Windows is not supported."
+        echo "Install WSL2, open a Linux shell in WSL2, then run this installer there."
+        exit 1
+        ;;
+esac
+
 case "${OS}-${ARCH}" in
     Darwin-arm64)
         ASSET="rwd-aarch64-apple-darwin.tar.gz"
