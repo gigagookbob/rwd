@@ -26,7 +26,8 @@ pub async fn call_codex_json_api(
         max_tokens,
         model,
         reasoning_effort,
-    );
+    )
+    .await;
     let _ = std::fs::remove_file(schema_path);
     result
 }
@@ -40,7 +41,7 @@ pub async fn call_codex_text_api(
     reasoning_effort: &str,
 ) -> Result<(String, ApiUsage), AnalyzerError> {
     let prompt = compose_prompt(system_prompt, conversation_text);
-    run_codex_exec(&prompt, None, max_tokens, model, reasoning_effort)
+    run_codex_exec(&prompt, None, max_tokens, model, reasoning_effort).await
 }
 
 fn compose_prompt(system_prompt: &str, conversation_text: &str) -> String {
@@ -118,7 +119,34 @@ const ANALYSIS_OUTPUT_SCHEMA: &str = r#"{
   }
 }"#;
 
-fn run_codex_exec(
+async fn run_codex_exec(
+    prompt: &str,
+    schema_path: Option<&Path>,
+    max_tokens: u32,
+    model: &str,
+    reasoning_effort: &str,
+) -> Result<(String, ApiUsage), AnalyzerError> {
+    let prompt = prompt.to_string();
+    let schema_path = schema_path.map(|path| path.to_path_buf());
+    let model = model.to_string();
+    let reasoning_effort = reasoning_effort.to_string();
+
+    tokio::task::spawn_blocking(move || {
+        run_codex_exec_blocking(
+            &prompt,
+            schema_path.as_deref(),
+            max_tokens,
+            &model,
+            &reasoning_effort,
+        )
+        .map_err(|err| err.to_string())
+    })
+    .await
+    .map_err(|join_err| format!("Codex exec join error: {join_err}"))?
+    .map_err(Into::into)
+}
+
+fn run_codex_exec_blocking(
     prompt: &str,
     schema_path: Option<&Path>,
     max_tokens: u32,

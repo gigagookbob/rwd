@@ -178,6 +178,23 @@ pub fn build_codex_prompt(
     Ok(output)
 }
 
+/// Extracts (role, text) tuples from Codex entries.
+pub fn extract_codex_messages(entries: &[CodexEntry]) -> Vec<(String, String)> {
+    let mut messages = Vec::new();
+    for entry in entries {
+        match entry {
+            CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
+                messages.push(("USER".to_string(), text.clone()));
+            }
+            CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => {
+                messages.push(("ASSISTANT".to_string(), text.clone()));
+            }
+            _ => {}
+        }
+    }
+    messages
+}
+
 /// Extracts unique session IDs from LogEntries, preserving insertion order.
 /// Used to split entries by session during fallback execution.
 pub fn extract_session_ids(entries: &[LogEntry]) -> Vec<String> {
@@ -209,6 +226,11 @@ pub const SYSTEM_PROMPT_ESTIMATED_TOKENS: u64 = 1_300;
 /// Korean syllables are ~1 token each, so char_count / 2 is a conservative estimate.
 pub fn estimate_tokens(text: &str) -> u64 {
     (text.chars().count() as u64) / 2
+}
+
+/// Estimates session tokens from a pre-built prompt text.
+pub fn estimate_prompt_tokens(prompt_text: &str) -> u64 {
+    estimate_tokens(prompt_text) + SYSTEM_PROMPT_ESTIMATED_TOKENS
 }
 
 /// Returns per-session token estimates.
@@ -348,6 +370,39 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_codex_messages_keeps_user_and_assistant_only() {
+        use crate::parser::codex::CodexEntry;
+        let entries = vec![
+            CodexEntry::SessionMeta {
+                timestamp: "2026-03-11T09:59:00Z".parse().unwrap(),
+                session_id: "s1".to_string(),
+                cwd: "/tmp".to_string(),
+                model_provider: "openai".to_string(),
+            },
+            CodexEntry::UserMessage {
+                timestamp: "2026-03-11T10:00:00Z".parse().unwrap(),
+                text: "질문".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: "2026-03-11T10:00:10Z".parse().unwrap(),
+                text: "답변".to_string(),
+            },
+            CodexEntry::FunctionCall {
+                timestamp: "2026-03-11T10:00:20Z".parse().unwrap(),
+                name: "Read".to_string(),
+            },
+        ];
+        let messages = extract_codex_messages(&entries);
+        assert_eq!(
+            messages,
+            vec![
+                ("USER".to_string(), "질문".to_string()),
+                ("ASSISTANT".to_string(), "답변".to_string())
+            ]
+        );
+    }
+
+    #[test]
     fn test_extract_session_ids_dedup_preserves_order() {
         let entries = vec![
             serde_json::from_str::<LogEntry>(
@@ -392,6 +447,12 @@ mod tests {
     #[test]
     fn test_estimate_tokens_empty_string() {
         assert_eq!(super::estimate_tokens(""), 0);
+    }
+
+    #[test]
+    fn test_estimate_prompt_tokens_includes_system_overhead() {
+        let tokens = estimate_prompt_tokens("hello");
+        assert!(tokens > estimate_tokens("hello"));
     }
 
     #[test]

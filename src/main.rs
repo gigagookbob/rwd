@@ -521,11 +521,15 @@ async fn run_today(
         sources.push(("Claude Code".to_string(), result));
     }
 
-    // Codex analysis — runs after Claude spinner finishes; fast enough to skip a spinner.
-    for (summary, entries) in &codex_sessions {
+    // Codex analysis — unified session pipeline (same executor as Claude).
+    if !codex_sessions.is_empty() {
+        let mut codex_tasks = Vec::new();
+        for (summary, entries) in &codex_sessions {
+            let task = analyzer::build_codex_session_task(entries, &summary.session_id)?;
+            codex_tasks.push(task);
+        }
         let (result, redact_result) =
-            analyzer::analyze_codex_entries(entries, &summary.session_id, redactor_enabled, &lang)
-                .await?;
+            analyzer::analyze_session_tasks(codex_tasks, redactor_enabled, verbose, &lang).await?;
         total_redact.merge(redact_result);
         sources.push(("Codex".to_string(), result));
     }
