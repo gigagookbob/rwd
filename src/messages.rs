@@ -512,11 +512,6 @@ pub mod update {
         format!("Remove duplicate {path} with: {command}")
     }
 
-    #[cfg(windows)]
-    pub fn update_deferred(version: &str) -> String {
-        format!("Finalizing v{version} update...")
-    }
-
     pub fn new_version_available(latest: &str, current: &str) -> String {
         format!("New version available: v{latest} (current: v{current})")
     }

@@ -45,8 +45,6 @@ jobs:
             os: macos-latest
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
-          - target: x86_64-pc-windows-msvc
-            os: windows-latest
 
     runs-on: ${{ matrix.os }}
 
@@ -58,31 +56,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      - name: Build release binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Build release binary
         run: |
           export RUSTFLAGS="--remap-path-prefix=$GITHUB_WORKSPACE=/workspace --remap-path-prefix=$RUNNER_TEMP=/runner-temp --remap-path-prefix=$HOME=/home/runner"
           cargo build --release --target ${{ matrix.target }}
 
-      - name: Build release binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          $env:RUSTFLAGS = "--remap-path-prefix=$env:GITHUB_WORKSPACE=/workspace --remap-path-prefix=$env:USERPROFILE=/Users/runner"
-          cargo build --release --target ${{ matrix.target }}
-
-      - name: Package binary (Unix)
-        if: runner.os != 'Windows'
+      - name: Package binary
         run: |
           cd target/${{ matrix.target }}/release
           tar czf ../../../rwd-${{ matrix.target }}.tar.gz rwd
           cd ../../..
-
-      - name: Package binary (Windows)
-        if: runner.os == 'Windows'
-        shell: pwsh
-        run: |
-          Compress-Archive -Path "target/${{ matrix.target }}/release/rwd.exe" -DestinationPath "rwd-${{ matrix.target }}.zip"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v4
@@ -131,4 +114,3 @@ jobs:
           generate_release_notes: true
           files: |
             rwd-*.tar.gz
-            rwd-*.zip
