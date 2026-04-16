@@ -40,7 +40,7 @@ async fn main() {
     // Worker mode skips this to avoid blocking (no terminal).
     let skip_update = matches!(
         args.command,
-        Commands::Update | Commands::Doctor | Commands::Reset { .. }
+        Commands::Update | Commands::Doctor | Commands::Reset { .. } | Commands::Version
     ) || matches!(args.command, Commands::Today { worker: true, .. });
     if !skip_update {
         update::notify_if_update_available().await;
@@ -126,6 +126,9 @@ async fn main() {
                 eprintln!("Error: {e}");
                 std::process::exit(1);
             }
+        }
+        Commands::Version => {
+            println!("rwd {}", env!("CARGO_PKG_VERSION"));
         }
         Commands::Auth { action } => match action {
             AuthAction::Status => {

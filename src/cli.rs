@@ -33,6 +33,7 @@ Examples:
   rwd reset --dry-run               Preview files that reset will remove
   rwd reset --yes                   Reset config/cache without confirmation
   rwd doctor                        Run environment and install diagnostics
+  rwd version                       Print current rwd version
   rwd update                        Update to the latest version"
 )]
 pub struct Cli {
@@ -141,10 +142,37 @@ Example:
     },
     /// Run environment and install diagnostics
     Doctor,
+    /// Print current rwd version
+    Version,
 }
 
 #[derive(Subcommand)]
 pub enum AuthAction {
     /// Show provider auth method and credential state
     Status,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Cli, Commands};
+    use clap::error::ErrorKind;
+    use clap::Parser;
+
+    #[test]
+    fn test_parse_version_subcommand() {
+        let parsed = Cli::try_parse_from(["rwd", "version"]);
+        assert!(parsed.is_ok());
+        if let Ok(cli) = parsed {
+            assert!(matches!(cli.command, Commands::Version));
+        }
+    }
+
+    #[test]
+    fn test_parse_version_flag_displays_version() {
+        let parsed = Cli::try_parse_from(["rwd", "--version"]);
+        assert!(parsed.is_err());
+        if let Err(err) = parsed {
+            assert_eq!(err.kind(), ErrorKind::DisplayVersion);
+        }
+    }
 }
