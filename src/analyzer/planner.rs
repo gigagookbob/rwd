@@ -13,7 +13,6 @@ pub struct RateLimits {
 
 impl RateLimits {
     /// Generous defaults used when probing fails.
-    /// Most users will proceed with single_shot; the runtime safety net handles actual limits.
     pub fn default_generous() -> Self {
         Self {
             input_tokens_per_minute: 1_000_000,
@@ -48,63 +47,33 @@ pub struct ExecutionStep {
 }
 
 /// Overall execution plan.
-/// When is_single_shot is true, all sessions are sent in one API call (no overhead for high-tier users).
 #[derive(Debug, Clone)]
 pub struct ExecutionPlan {
     pub rate_limits: RateLimits,
     pub steps: Vec<ExecutionStep>,
     pub total_estimated_tokens: u64,
-    pub is_single_shot: bool,
-    /// Dynamic max_tokens value for API calls.
-    pub recommended_max_tokens: u64,
 }
-
-/// Token budget reserved for the analyze_summary() call.
-const SUMMARY_BUDGET_TOKENS: u64 = 5_000;
-
-/// Estimated output tokens per session (conservative: ~1500 based on real-world measurements).
-const OUTPUT_TOKENS_PER_SESSION: u64 = 1_500;
-
-/// Output margin ratio (30%).
-const OUTPUT_MARGIN: f64 = 1.3;
 
 /// Builds an execution plan from rate limits and per-session estimates.
 ///
 /// Strategy branches:
-/// - total + budget <= ITPM AND estimated output <= model_max_output -> single_shot
-/// - individual session <= ITPM -> Direct (sequential per-session)
+/// - individual session <= ITPM -> Direct
 /// - individual session > ITPM -> Summarize (chunk and summarize)
 pub fn build_execution_plan(
     limits: &RateLimits,
     estimates: &[SessionEstimate],
-    model_max_output: u64,
+    _model_max_output: u64,
 ) -> ExecutionPlan {
-    let itpm = limits.input_tokens_per_minute;
+    let safe_itpm = limits.input_tokens_per_minute.max(1);
     let total: u64 = estimates.iter().map(|e| e.estimated_tokens).sum();
-    let num_sessions = estimates.len() as u64;
 
-    let estimated_output = (num_sessions * OUTPUT_TOKENS_PER_SESSION) as f64 * OUTPUT_MARGIN;
-    let recommended_max_tokens = (estimated_output as u64).min(model_max_output);
-
-    // Single-shot condition: both input AND output fit within limits.
-    if total + SUMMARY_BUDGET_TOKENS <= itpm && (estimated_output as u64) <= model_max_output {
-        return ExecutionPlan {
-            rate_limits: limits.clone(),
-            steps: Vec::new(),
-            total_estimated_tokens: total,
-            is_single_shot: true,
-            recommended_max_tokens,
-        };
-    }
-
-    // Per-session strategy selection.
     let steps: Vec<ExecutionStep> = estimates
         .iter()
         .map(|est| {
-            let strategy = if est.estimated_tokens <= itpm {
+            let strategy = if est.estimated_tokens <= safe_itpm {
                 StepStrategy::Direct
             } else {
-                let chunks = ((est.estimated_tokens as f64) / (itpm as f64)).ceil() as usize;
+                let chunks = ((est.estimated_tokens as f64) / (safe_itpm as f64)).ceil() as usize;
                 StepStrategy::Summarize {
                     chunks: chunks.max(2),
                 }
@@ -121,8 +90,6 @@ pub fn build_execution_plan(
         rate_limits: limits.clone(),
         steps,
         total_estimated_tokens: total,
-        is_single_shot: false,
-        recommended_max_tokens,
     }
 }
 
@@ -136,29 +103,6 @@ mod tests {
         assert_eq!(limits.input_tokens_per_minute, 1_000_000);
         assert_eq!(limits.output_tokens_per_minute, 200_000);
         assert_eq!(limits.requests_per_minute, 1_000);
-    }
-
-    #[test]
-    fn test_build_plan_single_shot_when_total_fits() {
-        let limits = RateLimits {
-            input_tokens_per_minute: 100_000,
-            output_tokens_per_minute: 50_000,
-            requests_per_minute: 100,
-        };
-        let estimates = vec![
-            SessionEstimate {
-                session_id: "s1".into(),
-                estimated_tokens: 10_000,
-            },
-            SessionEstimate {
-                session_id: "s2".into(),
-                estimated_tokens: 20_000,
-            },
-        ];
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(plan.is_single_shot);
-        assert!(plan.steps.is_empty());
-        assert_eq!(plan.total_estimated_tokens, 30_000);
     }
 
     #[test]
@@ -179,7 +123,6 @@ mod tests {
             },
         ];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(!plan.is_single_shot);
         assert_eq!(plan.steps.len(), 2);
         assert_eq!(plan.steps[0].strategy, StepStrategy::Direct);
         assert_eq!(plan.steps[1].strategy, StepStrategy::Direct);
@@ -197,7 +140,6 @@ mod tests {
             estimated_tokens: 50_000,
         }];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(!plan.is_single_shot);
         assert_eq!(plan.steps.len(), 1);
         assert_eq!(
             plan.steps[0].strategy,
@@ -206,87 +148,19 @@ mod tests {
     }
 
     #[test]
-    fn test_build_plan_default_generous_is_single_shot() {
-        let limits = RateLimits::default_generous();
-        let estimates = vec![SessionEstimate {
-            session_id: "s1".into(),
-            estimated_tokens: 50_000,
-        }];
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(plan.is_single_shot);
-    }
-
-    #[test]
-    fn test_build_plan_reserves_summary_budget() {
-        let limits = RateLimits {
-            input_tokens_per_minute: 35_000,
-            output_tokens_per_minute: 8_000,
-            requests_per_minute: 50,
-        };
-        let estimates = vec![SessionEstimate {
-            session_id: "s1".into(),
-            estimated_tokens: 31_000,
-        }];
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(!plan.is_single_shot);
-    }
-
-    #[test]
-    fn test_build_plan_exact_boundary_is_single_shot() {
-        let limits = RateLimits {
-            input_tokens_per_minute: 35_000,
-            output_tokens_per_minute: 8_000,
-            requests_per_minute: 50,
-        };
-        let estimates = vec![SessionEstimate {
-            session_id: "s1".into(),
-            estimated_tokens: 30_000,
-        }];
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(plan.is_single_shot);
-    }
-
-    #[test]
-    fn test_single_shot_blocked_by_output_limit() {
-        let limits = RateLimits::default_generous();
-        let estimates: Vec<SessionEstimate> = (0..22)
-            .map(|i| SessionEstimate {
-                session_id: format!("s{i}"),
-                estimated_tokens: 10_000,
-            })
-            .collect();
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(!plan.is_single_shot);
-        assert!(!plan.steps.is_empty());
-    }
-
-    #[test]
-    fn test_single_shot_allowed_when_output_fits() {
+    fn test_build_plan_total_estimated_tokens_is_sum() {
         let limits = RateLimits::default_generous();
         let estimates = vec![
             SessionEstimate {
                 session_id: "s1".into(),
-                estimated_tokens: 50_000,
+                estimated_tokens: 5_000,
             },
             SessionEstimate {
                 session_id: "s2".into(),
-                estimated_tokens: 30_000,
+                estimated_tokens: 7_000,
             },
         ];
         let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert!(plan.is_single_shot);
-    }
-
-    #[test]
-    fn test_recommended_max_tokens_scales_with_sessions() {
-        let limits = RateLimits::default_generous();
-        let estimates: Vec<SessionEstimate> = (0..10)
-            .map(|i| SessionEstimate {
-                session_id: format!("s{i}"),
-                estimated_tokens: 5_000,
-            })
-            .collect();
-        let plan = build_execution_plan(&limits, &estimates, 32_000);
-        assert_eq!(plan.recommended_max_tokens, 19_500);
+        assert_eq!(plan.total_estimated_tokens, 12_000);
     }
 }

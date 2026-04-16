@@ -764,9 +764,8 @@ mod tests {
         let kept_texts: Vec<&str> = filtered
             .iter()
             .filter_map(|entry| match entry {
-                CodexEntry::UserMessage { text, .. } | CodexEntry::AssistantMessage { text, .. } => {
-                    Some(text.as_str())
-                }
+                CodexEntry::UserMessage { text, .. }
+                | CodexEntry::AssistantMessage { text, .. } => Some(text.as_str()),
                 _ => None,
             })
             .collect();
