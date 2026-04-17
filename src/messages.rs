@@ -348,6 +348,12 @@ pub mod status {
         format!("    \u{2713} Chunk {i}/{total} done")
     }
 
+    pub fn chunk_cap_applied(requested: usize, cap: usize) -> String {
+        format!(
+            "    \u{26A0} Session produced {requested} chunks; capping to first {cap} to preserve quota"
+        )
+    }
+
     pub fn plan_multi_step_scoped(source: &str, steps: usize, total_tokens: u64) -> String {
         format!("\u{2713} [{source}] Analyzing {steps} sessions (est. {total_tokens} tokens)")
     }
