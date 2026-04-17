@@ -92,6 +92,8 @@ pub enum ContentBlock {
         name: Option<String>,
         #[serde(default)]
         id: Option<String>,
+        #[serde(default)]
+        input: Option<serde_json::Value>,
     },
     ToolResult {
         #[serde(default)]
