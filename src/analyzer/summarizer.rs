@@ -19,9 +19,13 @@ pub fn get_chunk_summarize_prompt(lang: &Lang) -> &'static str {
 }
 
 /// Splits messages into chunks that fit within the ITPM limit.
-/// Splits only at message boundaries (never mid-message).
-/// A single message exceeding the limit becomes its own chunk.
-pub fn split_into_chunks(messages: &[(String, String)], itpm: u64) -> Vec<Vec<(String, String)>> {
+/// Splits at message boundaries when possible, and mid-message only when needed to satisfy
+/// hard character caps from providers like Codex CLI.
+pub fn split_into_chunks(
+    messages: &[(String, String)],
+    itpm: u64,
+    max_chunk_chars: usize,
+) -> Vec<Vec<(String, String)>> {
     if messages.is_empty() {
         return Vec::new();
     }
@@ -29,19 +33,30 @@ pub fn split_into_chunks(messages: &[(String, String)], itpm: u64) -> Vec<Vec<(S
     let mut chunks: Vec<Vec<(String, String)>> = Vec::new();
     let mut current_chunk: Vec<(String, String)> = Vec::new();
     let mut current_tokens: u64 = 0;
+    let mut current_chars: usize = 0;
+    let max_chunk_chars = max_chunk_chars.max(1);
 
     for (role, text) in messages {
-        let msg_tokens = estimate_tokens(text);
+        let parts = split_message_text_by_chars(role, text, max_chunk_chars);
+        for part in parts {
+            let msg_tokens = estimate_tokens(&part);
+            let msg_chars = rendered_message_chars(role, &part);
 
-        // Adding this message would exceed the limit -- start a new chunk.
-        if !current_chunk.is_empty() && current_tokens + msg_tokens > itpm {
-            chunks.push(current_chunk);
-            current_chunk = Vec::new();
-            current_tokens = 0;
+            // Adding this message would exceed a limit -- start a new chunk.
+            if !current_chunk.is_empty()
+                && (current_tokens + msg_tokens > itpm
+                    || current_chars.saturating_add(msg_chars) > max_chunk_chars)
+            {
+                chunks.push(current_chunk);
+                current_chunk = Vec::new();
+                current_tokens = 0;
+                current_chars = 0;
+            }
+
+            current_chunk.push((role.clone(), part));
+            current_tokens += msg_tokens;
+            current_chars = current_chars.saturating_add(msg_chars);
         }
-
-        current_chunk.push((role.clone(), text.clone()));
-        current_tokens += msg_tokens;
     }
 
     if !current_chunk.is_empty() {
@@ -49,6 +64,39 @@ pub fn split_into_chunks(messages: &[(String, String)], itpm: u64) -> Vec<Vec<(S
     }
 
     chunks
+}
+
+fn rendered_message_chars(role: &str, text: &str) -> usize {
+    // Render format is "[ROLE] {text}\n".
+    role.chars().count() + 4 + text.chars().count()
+}
+
+fn split_message_text_by_chars(role: &str, text: &str, max_chunk_chars: usize) -> Vec<String> {
+    let role_overhead = role.chars().count() + 4;
+    let max_text_chars = max_chunk_chars.saturating_sub(role_overhead).max(1);
+    let total_chars = text.chars().count();
+    if total_chars <= max_text_chars {
+        return vec![text.to_string()];
+    }
+
+    let mut parts = Vec::new();
+    let mut start = 0usize;
+    let mut count = 0usize;
+    for (idx, _) in text.char_indices() {
+        if count == max_text_chars {
+            parts.push(text[start..idx].to_string());
+            start = idx;
+            count = 0;
+        }
+        count += 1;
+    }
+    if start < text.len() {
+        parts.push(text[start..].to_string());
+    }
+    if parts.is_empty() {
+        parts.push(String::new());
+    }
+    parts
 }
 
 /// Calculates wait time based on ITPM/RPM limits.
@@ -103,6 +151,7 @@ pub async fn summarize_chunks(
 #[cfg(test)]
 mod tests {
     use super::*;
+    const TEST_MAX_CHARS: usize = 1_048_576;
 
     #[test]
     fn test_split_into_chunks_respects_token_limit() {
@@ -111,7 +160,7 @@ mod tests {
             ("USER".to_string(), "b".repeat(20)),
             ("USER".to_string(), "c".repeat(20)),
         ];
-        let chunks = split_into_chunks(&messages, 25);
+        let chunks = split_into_chunks(&messages, 25, TEST_MAX_CHARS);
         assert_eq!(chunks.len(), 2);
         assert_eq!(chunks[0].len(), 2);
         assert_eq!(chunks[1].len(), 1);
@@ -120,16 +169,29 @@ mod tests {
     #[test]
     fn test_split_into_chunks_single_message_exceeds_limit() {
         let messages = vec![("USER".to_string(), "a".repeat(100))];
-        let chunks = split_into_chunks(&messages, 25);
-        assert_eq!(chunks.len(), 1);
-        assert_eq!(chunks[0].len(), 1);
+        let chunks = split_into_chunks(&messages, 25, 32);
+        assert!(chunks.len() >= 2);
     }
 
     #[test]
     fn test_split_into_chunks_empty_messages() {
         let messages: Vec<(String, String)> = vec![];
-        let chunks = split_into_chunks(&messages, 30_000);
+        let chunks = split_into_chunks(&messages, 30_000, TEST_MAX_CHARS);
         assert!(chunks.is_empty());
+    }
+
+    #[test]
+    fn test_split_into_chunks_respects_char_limit() {
+        let messages = vec![("ASSISTANT".to_string(), "x".repeat(200))];
+        let chunks = split_into_chunks(&messages, 1_000_000, 64);
+        assert!(chunks.len() >= 3);
+        for chunk in chunks {
+            let rendered: usize = chunk
+                .iter()
+                .map(|(role, text)| rendered_message_chars(role, text))
+                .sum();
+            assert!(rendered <= 64);
+        }
     }
 
     #[test]

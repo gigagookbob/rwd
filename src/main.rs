@@ -513,13 +513,21 @@ async fn run_today(
         crate::messages::status::analyzing(&provider_label)
     );
 
+    let analysis_context = analyzer::prepare_session_analysis_context().await?;
     let mut sources: Vec<(String, analyzer::AnalysisResult)> = Vec::new();
     let mut total_redact = redactor::RedactResult::empty();
 
     // Claude analysis
     if !claude_entries.is_empty() {
-        let (result, redact_result) =
-            analyzer::analyze_entries(&claude_entries, redactor_enabled, verbose, &lang).await?;
+        let (result, redact_result) = analyzer::analyze_entries(
+            &claude_entries,
+            redactor_enabled,
+            verbose,
+            &lang,
+            "Claude Code",
+            &analysis_context,
+        )
+        .await?;
         total_redact.merge(redact_result);
         sources.push(("Claude Code".to_string(), result));
     }
@@ -531,8 +539,15 @@ async fn run_today(
             let task = analyzer::build_codex_session_task(entries, &summary.session_id)?;
             codex_tasks.push(task);
         }
-        let (result, redact_result) =
-            analyzer::analyze_session_tasks(codex_tasks, redactor_enabled, verbose, &lang).await?;
+        let (result, redact_result) = analyzer::analyze_session_tasks(
+            codex_tasks,
+            redactor_enabled,
+            verbose,
+            &lang,
+            "Codex",
+            &analysis_context,
+        )
+        .await?;
         total_redact.merge(redact_result);
         sources.push(("Codex".to_string(), result));
     }
@@ -1104,9 +1119,8 @@ fn codex_activity_timestamps(
             parser::codex::CodexEntry::UserMessage { timestamp, .. }
             | parser::codex::CodexEntry::AssistantMessage { timestamp, .. }
             | parser::codex::CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
-            parser::codex::CodexEntry::SessionMeta { .. } | parser::codex::CodexEntry::Other => {
-                None
-            }
+            parser::codex::CodexEntry::SessionMeta { .. }
+            | parser::codex::CodexEntry::Other { .. } => None,
         })
 }
 
@@ -1542,6 +1556,7 @@ mod tests {
                     session_id: "s1".to_string(),
                     cwd: "/tmp".to_string(),
                     model_provider: "openai".to_string(),
+                    text: "s1\n/tmp\nopenai".to_string(),
                 },
                 parser::codex::CodexEntry::UserMessage {
                     timestamp: first_activity_ts,
