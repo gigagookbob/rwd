@@ -9,6 +9,10 @@ const SUMMARY_PROMPT_EN: &str = include_str!("../../prompts/summary_en.md");
 const SUMMARY_PROMPT_KO: &str = include_str!("../../prompts/summary_ko.md");
 const SLACK_PROMPT_EN: &str = include_str!("../../prompts/slack_en.md");
 const SLACK_PROMPT_KO: &str = include_str!("../../prompts/slack_ko.md");
+const CODEX_PROMPT_PREFIX: &str = "[System Instructions]\n";
+const CODEX_PROMPT_MIDDLE: &str = "\n\n[Conversation]\n";
+const CODEX_MAX_INPUT_CHARS: usize = 1_048_576;
+const CODEX_INPUT_SAFETY_MARGIN_CHARS: usize = 8_192;
 
 fn get_system_prompt(lang: &Lang) -> &'static str {
     match lang {
@@ -31,6 +35,14 @@ fn get_slack_prompt(lang: &Lang) -> &'static str {
     }
 }
 
+fn codex_max_conversation_chars(system_prompt: &str) -> usize {
+    let overhead = CODEX_PROMPT_PREFIX.chars().count()
+        + CODEX_PROMPT_MIDDLE.chars().count()
+        + system_prompt.chars().count()
+        + CODEX_INPUT_SAFETY_MARGIN_CHARS;
+    CODEX_MAX_INPUT_CHARS.saturating_sub(overhead)
+}
+
 /// LLM provider enum. Adding a new variant triggers compile errors at unhandled match arms.
 pub enum LlmProvider {
     Anthropic,
@@ -48,6 +60,23 @@ impl LlmProvider {
             LlmProvider::Anthropic => 32_000,
             LlmProvider::OpenAi => 16_384,
             LlmProvider::Codex { .. } => 16_384,
+        }
+    }
+
+    /// Returns a safe max length for conversation text for the provider's default analysis prompt.
+    /// None means no explicit character cap is enforced here.
+    pub fn max_conversation_chars(&self, lang: &Lang) -> Option<usize> {
+        match self {
+            LlmProvider::Codex { .. } => Some(codex_max_conversation_chars(get_system_prompt(lang))),
+            _ => None,
+        }
+    }
+
+    /// Returns a safe max length for conversation text for an arbitrary system prompt.
+    pub fn max_conversation_chars_with_prompt(&self, system_prompt: &str) -> Option<usize> {
+        match self {
+            LlmProvider::Codex { .. } => Some(codex_max_conversation_chars(system_prompt)),
+            _ => None,
         }
     }
 

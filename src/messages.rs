@@ -299,6 +299,10 @@ pub mod status {
         format!("Analyzing insights via {provider}...")
     }
 
+    pub fn analyzing_source(source: &str, sessions: usize) -> String {
+        format!("Analyzing {source} sessions... ({sessions} total)")
+    }
+
     pub fn redacted(count: usize, summary: &str) -> String {
         format!("{count} sensitive item(s) masked ({summary})")
     }
@@ -344,8 +348,8 @@ pub mod status {
         format!("    \u{2713} Chunk {i}/{total} done")
     }
 
-    pub fn plan_multi_step(steps: usize, total_tokens: u64) -> String {
-        format!("\u{2713} Analyzing {steps} sessions (est. {total_tokens} tokens)")
+    pub fn plan_multi_step_scoped(source: &str, steps: usize, total_tokens: u64) -> String {
+        format!("\u{2713} [{source}] Analyzing {steps} sessions (est. {total_tokens} tokens)")
     }
 
     pub fn plan_step_direct(session_id: &str, tokens: u64) -> String {

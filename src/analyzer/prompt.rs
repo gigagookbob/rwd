@@ -1,7 +1,7 @@
 // Converts LogEntry slices into prompt text for LLM analysis.
 //
 // Pure data transformation with no network calls, making it easy to unit-test.
-// Only Text blocks are included; Thinking/ToolUse/ToolResult are excluded (too verbose).
+// Default behavior preserves all extractable text from session entries.
 
 use super::planner::SessionEstimate;
 use crate::parser::claude::{ContentBlock, LogEntry};
@@ -28,34 +28,16 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
     let mut session_order: Vec<&str> = Vec::new();
 
     for entry in entries {
-        match entry {
-            LogEntry::User(e) => {
-                if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
-                    let session_id = e.session_id.as_str();
-                    if !sessions.contains_key(session_id) {
-                        session_order.push(session_id);
-                    }
-                    sessions.entry(session_id).or_default().push(("USER", text));
-                }
-            }
-            LogEntry::Assistant(e) => {
-                if let Some(msg) = &e.message {
-                    let text = extract_assistant_text(&msg.content);
-                    if !text.is_empty() {
-                        let session_id = e.session_id.as_str();
-                        if !sessions.contains_key(session_id) {
-                            session_order.push(session_id);
-                        }
-                        sessions
-                            .entry(session_id)
-                            .or_default()
-                            .push(("ASSISTANT", text));
-                    }
-                }
-            }
-            // Skip non-conversation entries (Progress, System, FileHistorySnapshot, Other).
-            _ => {}
+        let Some(session_id) = entry_session_id(entry) else {
+            continue;
+        };
+        let Some((role, text)) = extract_entry_text(entry) else {
+            continue;
+        };
+        if !sessions.contains_key(session_id) {
+            session_order.push(session_id);
         }
+        sessions.entry(session_id).or_default().push((role, text));
     }
 
     let mut output = String::new();
@@ -72,57 +54,163 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
     output
 }
 
-/// Extracts text from a UserEntry's message (serde_json::Value).
-///
-/// Claude Code user messages come in two forms:
-/// 1. {"role":"user","content":"text"} -- content is a string
-/// 2. {"role":"user","content":[{"type":"text","text":"text"}]} -- content is an array
-fn extract_user_text(value: &serde_json::Value) -> Option<String> {
-    let content = value.get("content")?;
-
-    if let Some(text) = content.as_str()
-        && !text.is_empty()
-    {
-        return Some(text.to_string());
-    }
-
-    // Content is an array -- extract and join text blocks.
-    if let Some(blocks) = content.as_array() {
-        let texts: Vec<&str> = blocks
-            .iter()
-            .filter_map(|block| {
-                if block.get("type")?.as_str()? == "text" {
-                    block.get("text")?.as_str()
-                } else {
-                    None
-                }
-            })
-            .collect();
-        if !texts.is_empty() {
-            return Some(texts.join("\n"));
+/// Recursively collects all non-empty string leaves from JSON.
+fn collect_json_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if !s.trim().is_empty() {
+                out.push(s.clone());
+            }
         }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_json_string_leaves(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_json_string_leaves(value, out);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
     }
-
-    None
 }
 
-/// Extracts text from AssistantEntry ContentBlocks.
-///
-/// Only includes Text blocks; skips Thinking, ToolUse, and ToolResult
-/// as they add noise without contributing to insight extraction.
+fn join_unique_lines(parts: &[String]) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let mut lines = Vec::new();
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            lines.push(trimmed.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+fn extract_all_json_text(value: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    collect_json_string_leaves(value, &mut parts);
+    join_unique_lines(&parts)
+}
+
 fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
-    let texts: Vec<&str> = blocks
-        .iter()
-        .filter_map(|block| {
-            if let ContentBlock::Text { text } = block {
-                text.as_deref()
-            } else {
-                None
+    let mut parts = Vec::new();
+    for block in blocks {
+        match block {
+            ContentBlock::Text { text } => {
+                if let Some(text) = text {
+                    parts.push(text.clone());
+                }
             }
-        })
-        .filter(|t| !t.is_empty())
-        .collect();
-    texts.join("\n")
+            ContentBlock::Thinking { thinking } => {
+                if let Some(thinking) = thinking {
+                    parts.push(thinking.clone());
+                }
+            }
+            ContentBlock::ToolUse { name, id, input } => {
+                if let Some(name) = name {
+                    parts.push(name.clone());
+                }
+                if let Some(id) = id {
+                    parts.push(id.clone());
+                }
+                if let Some(input) = input {
+                    let text = extract_all_json_text(input);
+                    if !text.is_empty() {
+                        parts.push(text);
+                    }
+                }
+            }
+            ContentBlock::ToolResult { content } => {
+                if let Some(content) = content {
+                    let text = extract_all_json_text(content);
+                    if !text.is_empty() {
+                        parts.push(text);
+                    }
+                }
+            }
+            ContentBlock::Unknown => {}
+        }
+    }
+    join_unique_lines(&parts)
+}
+
+fn session_id_from_other(entry: &serde_json::Value) -> Option<&str> {
+    entry
+        .get("sessionId")
+        .and_then(serde_json::Value::as_str)
+        .or_else(|| entry.get("session_id").and_then(serde_json::Value::as_str))
+}
+
+fn entry_session_id(entry: &LogEntry) -> Option<&str> {
+    match entry {
+        LogEntry::User(e) => Some(e.session_id.as_str()),
+        LogEntry::Assistant(e) => Some(e.session_id.as_str()),
+        LogEntry::Progress(e) => Some(e.session_id.as_str()),
+        LogEntry::System(e) => e.session_id.as_deref(),
+        LogEntry::FileHistorySnapshot(_) => None,
+        LogEntry::Other(raw) => session_id_from_other(raw),
+    }
+}
+
+fn extract_entry_text(entry: &LogEntry) -> Option<(&'static str, String)> {
+    match entry {
+        LogEntry::User(e) => {
+            let mut parts = Vec::new();
+            if let Some(message) = &e.message {
+                parts.push(extract_all_json_text(message));
+            }
+            if let Some(entrypoint) = &e.entrypoint {
+                parts.push(entrypoint.clone());
+            }
+            if let Some(cwd) = &e.cwd {
+                parts.push(cwd.clone());
+            }
+            let text = join_unique_lines(&parts);
+            (!text.is_empty()).then_some(("USER", text))
+        }
+        LogEntry::Assistant(e) => {
+            let mut parts = Vec::new();
+            if let Some(message) = &e.message {
+                parts.push(extract_assistant_text(&message.content));
+                if let Some(model) = &message.model {
+                    parts.push(model.clone());
+                }
+            }
+            if let Some(entrypoint) = &e.entrypoint {
+                parts.push(entrypoint.clone());
+            }
+            if let Some(cwd) = &e.cwd {
+                parts.push(cwd.clone());
+            }
+            let text = join_unique_lines(&parts);
+            (!text.is_empty()).then_some(("ASSISTANT", text))
+        }
+        LogEntry::Progress(e) => {
+            let mut parts = Vec::new();
+            if let Some(entrypoint) = &e.entrypoint {
+                parts.push(entrypoint.clone());
+            }
+            if let Some(cwd) = &e.cwd {
+                parts.push(cwd.clone());
+            }
+            let text = join_unique_lines(&parts);
+            (!text.is_empty()).then_some(("PROGRESS", text))
+        }
+        LogEntry::System(_) => None,
+        LogEntry::FileHistorySnapshot(e) => e
+            .message_id
+            .as_ref()
+            .and_then(|id| (!id.trim().is_empty()).then_some(("SNAPSHOT", id.clone()))),
+        LogEntry::Other(raw) => {
+            let text = extract_all_json_text(raw);
+            (!text.is_empty()).then_some(("EVENT", text))
+        }
+    }
 }
 
 /// Extracts (role, text) tuples from LogEntries.
@@ -130,21 +218,8 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
 pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for entry in entries {
-        match entry {
-            LogEntry::User(e) => {
-                if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
-                    messages.push(("USER".to_string(), text));
-                }
-            }
-            LogEntry::Assistant(e) => {
-                if let Some(msg) = &e.message {
-                    let text = extract_assistant_text(&msg.content);
-                    if !text.is_empty() {
-                        messages.push(("ASSISTANT".to_string(), text));
-                    }
-                }
-            }
-            _ => {}
+        if let Some((role, text)) = extract_entry_text(entry) {
+            messages.push((role.to_string(), text));
         }
     }
     messages
@@ -157,21 +232,37 @@ pub fn build_codex_prompt(
     session_id: &str,
 ) -> Result<String, super::AnalyzerError> {
     let mut output = format!("[Session: {session_id}]\n");
+    let mut has_text = false;
 
     for entry in entries {
         match entry {
-            CodexEntry::UserMessage { text, .. } => {
+            CodexEntry::SessionMeta { text, .. } if !text.is_empty() => {
+                has_text = true;
+                output.push_str(&format!("[META] {text}\n"));
+            }
+            CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
+                has_text = true;
                 output.push_str(&format!("[USER] {text}\n"));
             }
-            CodexEntry::AssistantMessage { text, .. } => {
+            CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => {
+                has_text = true;
                 output.push_str(&format!("[ASSISTANT] {text}\n"));
+            }
+            CodexEntry::FunctionCall { text, .. } if !text.is_empty() => {
+                has_text = true;
+                output.push_str(&format!("[TOOL] {text}\n"));
+            }
+            CodexEntry::Other {
+                entry_type, text, ..
+            } if !text.is_empty() => {
+                has_text = true;
+                output.push_str(&format!("[EVENT:{entry_type}] {text}\n"));
             }
             _ => {}
         }
     }
 
-    // Only session header present with no conversation content.
-    if !output.contains("[USER]") && !output.contains("[ASSISTANT]") {
+    if !has_text {
         return Err(crate::messages::error::NO_CONVERSATION_CODEX.into());
     }
 
@@ -183,11 +274,22 @@ pub fn extract_codex_messages(entries: &[CodexEntry]) -> Vec<(String, String)> {
     let mut messages = Vec::new();
     for entry in entries {
         match entry {
+            CodexEntry::SessionMeta { text, .. } if !text.is_empty() => {
+                messages.push(("META".to_string(), text.clone()));
+            }
             CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
                 messages.push(("USER".to_string(), text.clone()));
             }
             CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => {
                 messages.push(("ASSISTANT".to_string(), text.clone()));
+            }
+            CodexEntry::FunctionCall { text, .. } if !text.is_empty() => {
+                messages.push(("TOOL".to_string(), text.clone()));
+            }
+            CodexEntry::Other {
+                entry_type, text, ..
+            } if !text.is_empty() => {
+                messages.push((format!("EVENT:{entry_type}"), text.clone()));
             }
             _ => {}
         }
@@ -242,35 +344,13 @@ pub fn estimate_sessions(entries: &[LogEntry]) -> Vec<SessionEstimate> {
         let mut total_chars: u64 = 0;
 
         for entry in entries {
-            let eid = match entry {
-                LogEntry::User(u) => Some(u.session_id.as_str()),
-                LogEntry::Assistant(a) => Some(a.session_id.as_str()),
-                LogEntry::Progress(p) => Some(p.session_id.as_str()),
-                LogEntry::System(s) => s.session_id.as_deref(),
-                LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => None,
-            };
+            let eid = entry_session_id(entry);
             if eid != Some(session_id.as_str()) {
                 continue;
             }
 
-            match entry {
-                LogEntry::User(e) => {
-                    if let Some(text) = e.message.as_ref().and_then(extract_user_text) {
-                        total_chars += text.chars().count() as u64;
-                    }
-                }
-                LogEntry::Assistant(e) => {
-                    if let Some(msg) = &e.message {
-                        for block in &msg.content {
-                            if let ContentBlock::Text { text } = block
-                                && let Some(t) = text
-                            {
-                                total_chars += t.chars().count() as u64;
-                            }
-                        }
-                    }
-                }
-                _ => {}
+            if let Some((_, text)) = extract_entry_text(entry) {
+                total_chars += text.chars().count() as u64;
             }
         }
 
@@ -316,14 +396,14 @@ mod tests {
     }
 
     #[test]
-    fn test_build_prompt_ignores_thinking_blocks() {
+    fn test_build_prompt_includes_thinking_blocks() {
         let entries = vec![serde_json::from_str::<LogEntry>(
             r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-03-11T10:00:30Z","uuid":"a1","message":{"role":"assistant","content":[{"type":"thinking","thinking":"내부 추론"},{"type":"text","text":"보이는 텍스트"}]}}"#,
         )
         .unwrap()];
         let prompt = build_prompt(&entries).unwrap();
         assert!(prompt.contains("보이는 텍스트"));
-        assert!(!prompt.contains("내부 추론"));
+        assert!(prompt.contains("내부 추론"));
     }
 
     #[test]
@@ -370,7 +450,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_codex_messages_keeps_user_and_assistant_only() {
+    fn test_extract_codex_messages_includes_metadata_and_tool_entries() {
         use crate::parser::codex::CodexEntry;
         let entries = vec![
             CodexEntry::SessionMeta {
@@ -378,6 +458,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/tmp".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/tmp\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: "2026-03-11T10:00:00Z".parse().unwrap(),
@@ -390,14 +471,17 @@ mod tests {
             CodexEntry::FunctionCall {
                 timestamp: "2026-03-11T10:00:20Z".parse().unwrap(),
                 name: "Read".to_string(),
+                text: "Read\nsrc/main.rs".to_string(),
             },
         ];
         let messages = extract_codex_messages(&entries);
         assert_eq!(
             messages,
             vec![
+                ("META".to_string(), "s1\n/tmp\nopenai".to_string()),
                 ("USER".to_string(), "질문".to_string()),
-                ("ASSISTANT".to_string(), "답변".to_string())
+                ("ASSISTANT".to_string(), "답변".to_string()),
+                ("TOOL".to_string(), "Read\nsrc/main.rs".to_string())
             ]
         );
     }

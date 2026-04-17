@@ -39,6 +39,7 @@ pub enum CodexEntry {
         session_id: String,
         cwd: String,
         model_provider: String,
+        text: String,
     },
     /// User input message
     UserMessage {
@@ -54,9 +55,56 @@ pub enum CodexEntry {
     FunctionCall {
         timestamp: DateTime<Utc>,
         name: String,
+        text: String,
     },
     /// Unknown or unhandled entry
-    Other,
+    Other {
+        timestamp: DateTime<Utc>,
+        entry_type: String,
+        text: String,
+    },
+}
+
+fn collect_json_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
+    match value {
+        serde_json::Value::String(s) => {
+            if !s.trim().is_empty() {
+                out.push(s.clone());
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                collect_json_string_leaves(item, out);
+            }
+        }
+        serde_json::Value::Object(map) => {
+            for value in map.values() {
+                collect_json_string_leaves(value, out);
+            }
+        }
+        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
+    }
+}
+
+fn join_unique_lines(parts: &[String]) -> String {
+    let mut seen = HashSet::new();
+    let mut lines = Vec::new();
+    for part in parts {
+        let trimmed = part.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+        if seen.insert(trimmed.to_string()) {
+            lines.push(trimmed.to_string());
+        }
+    }
+    lines.join("\n")
+}
+
+fn extract_payload_text(payload: &serde_json::Value) -> String {
+    let mut parts = Vec::new();
+    collect_json_string_leaves(payload, &mut parts);
+    join_unique_lines(&parts)
 }
 
 impl CodexEntry {
@@ -65,9 +113,11 @@ impl CodexEntry {
     /// is unofficial and may vary across versions.
     pub fn from_raw(raw: CodexRawEntry) -> Self {
         let ts = raw.timestamp;
+        let entry_type = raw.entry_type;
         let payload = &raw.payload;
+        let payload_text = extract_payload_text(payload);
 
-        match raw.entry_type.as_str() {
+        match entry_type.as_str() {
             "session_meta" => {
                 let session_id = payload["id"].as_str().unwrap_or_default().to_string();
                 let cwd = payload["cwd"].as_str().unwrap_or_default().to_string();
@@ -80,10 +130,12 @@ impl CodexEntry {
                     session_id,
                     cwd,
                     model_provider,
+                    text: payload_text.clone(),
                 }
             }
             "event_msg" if payload["type"].as_str() == Some("user_message") => {
                 let text = payload["message"].as_str().unwrap_or_default().to_string();
+                let text = join_unique_lines(&[text, payload_text.clone()]);
                 CodexEntry::UserMessage {
                     timestamp: ts,
                     text,
@@ -94,6 +146,7 @@ impl CodexEntry {
                     && payload["role"].as_str() == Some("assistant") =>
             {
                 let text = extract_codex_output_text(payload);
+                let text = join_unique_lines(&[text, payload_text.clone()]);
                 CodexEntry::AssistantMessage {
                     timestamp: ts,
                     text,
@@ -101,12 +154,18 @@ impl CodexEntry {
             }
             "response_item" if payload["type"].as_str() == Some("function_call") => {
                 let name = payload["name"].as_str().unwrap_or_default().to_string();
+                let text = join_unique_lines(&[name.clone(), payload_text.clone()]);
                 CodexEntry::FunctionCall {
                     timestamp: ts,
                     name,
+                    text,
                 }
             }
-            _ => CodexEntry::Other,
+            _ => CodexEntry::Other {
+                timestamp: ts,
+                entry_type,
+                text: payload_text,
+            },
         }
     }
 }
@@ -217,8 +276,8 @@ pub fn entry_timestamp(entry: &CodexEntry) -> Option<DateTime<Utc>> {
         CodexEntry::SessionMeta { timestamp, .. }
         | CodexEntry::UserMessage { timestamp, .. }
         | CodexEntry::AssistantMessage { timestamp, .. }
-        | CodexEntry::FunctionCall { timestamp, .. } => Some(*timestamp),
-        CodexEntry::Other => None,
+        | CodexEntry::FunctionCall { timestamp, .. }
+        | CodexEntry::Other { timestamp, .. } => Some(*timestamp),
     }
 }
 
@@ -280,6 +339,7 @@ enum CodexEntryFingerprint {
         session_id: String,
         cwd: String,
         model_provider: String,
+        text: String,
     },
     UserMessage {
         timestamp_millis: i64,
@@ -292,8 +352,13 @@ enum CodexEntryFingerprint {
     FunctionCall {
         timestamp_millis: i64,
         name: String,
+        text: String,
     },
-    Other,
+    Other {
+        timestamp_millis: i64,
+        entry_type: String,
+        text: String,
+    },
 }
 
 fn entry_fingerprint(entry: &CodexEntry) -> CodexEntryFingerprint {
@@ -303,11 +368,13 @@ fn entry_fingerprint(entry: &CodexEntry) -> CodexEntryFingerprint {
             session_id,
             cwd,
             model_provider,
+            text,
         } => CodexEntryFingerprint::SessionMeta {
             timestamp_millis: timestamp.timestamp_millis(),
             session_id: session_id.clone(),
             cwd: cwd.clone(),
             model_provider: model_provider.clone(),
+            text: text.clone(),
         },
         CodexEntry::UserMessage { timestamp, text } => CodexEntryFingerprint::UserMessage {
             timestamp_millis: timestamp.timestamp_millis(),
@@ -319,11 +386,24 @@ fn entry_fingerprint(entry: &CodexEntry) -> CodexEntryFingerprint {
                 text: text.clone(),
             }
         }
-        CodexEntry::FunctionCall { timestamp, name } => CodexEntryFingerprint::FunctionCall {
+        CodexEntry::FunctionCall {
+            timestamp,
+            name,
+            text,
+        } => CodexEntryFingerprint::FunctionCall {
             timestamp_millis: timestamp.timestamp_millis(),
             name: name.clone(),
+            text: text.clone(),
         },
-        CodexEntry::Other => CodexEntryFingerprint::Other,
+        CodexEntry::Other {
+            timestamp,
+            entry_type,
+            text,
+        } => CodexEntryFingerprint::Other {
+            timestamp_millis: timestamp.timestamp_millis(),
+            entry_type: entry_type.clone(),
+            text: text.clone(),
+        },
     }
 }
 
@@ -394,7 +474,7 @@ pub fn summarize_codex_entries(entries: &[CodexEntry]) -> CodexSessionSummary {
             CodexEntry::UserMessage { .. } => summary.user_count += 1,
             CodexEntry::AssistantMessage { .. } => summary.assistant_count += 1,
             CodexEntry::FunctionCall { .. } => summary.function_call_count += 1,
-            CodexEntry::Other => {}
+            CodexEntry::Other { .. } => {}
         }
     }
 
@@ -434,7 +514,7 @@ mod tests {
         let entry = CodexEntry::from_raw(raw);
 
         if let CodexEntry::UserMessage { text, .. } = entry {
-            assert_eq!(text, "fix the bug");
+            assert!(text.contains("fix the bug"));
         } else {
             panic!("Expected UserMessage variant");
         }
@@ -447,7 +527,8 @@ mod tests {
         let entry = CodexEntry::from_raw(raw);
 
         if let CodexEntry::AssistantMessage { text, .. } = entry {
-            assert_eq!(text, "Sure, I'll fix it. Done.");
+            assert!(text.contains("Sure, I'll fix it."));
+            assert!(text.contains("Done."));
         } else {
             panic!("Expected AssistantMessage variant");
         }
@@ -472,7 +553,7 @@ mod tests {
             r#"{"timestamp":"2026-03-16T09:04:00Z","type":"unknown_future_type","payload":{}}"#;
         let raw: CodexRawEntry = serde_json::from_str(json).unwrap();
         let entry = CodexEntry::from_raw(raw);
-        assert!(matches!(entry, CodexEntry::Other));
+        assert!(matches!(entry, CodexEntry::Other { .. }));
     }
 
     #[test]
@@ -579,6 +660,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/p".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/p\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: ts,
@@ -641,6 +723,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/p".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/p\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: yesterday_ts,
@@ -684,6 +767,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/p".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/p\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: yesterday_ts,
@@ -709,6 +793,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/p".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/p\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: today_ts,
@@ -721,6 +806,7 @@ mod tests {
             CodexEntry::FunctionCall {
                 timestamp: today_ts,
                 name: "shell".to_string(),
+                text: "shell".to_string(),
             },
         ];
 
@@ -739,6 +825,7 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/p".to_string(),
                 model_provider: "openai".to_string(),
+                text: "s1\n/p\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
                 timestamp: window.start_utc - chrono::Duration::nanoseconds(1),
