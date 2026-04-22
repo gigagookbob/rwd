@@ -514,6 +514,9 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/tmp".to_string(),
                 model_provider: "openai".to_string(),
+                subagent_source: None,
+                agent_role: None,
+                agent_nickname: None,
                 text: "s1\n/tmp\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
