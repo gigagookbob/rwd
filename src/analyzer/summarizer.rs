@@ -8,6 +8,11 @@ use super::prompt::estimate_tokens;
 
 use crate::config::Lang;
 
+/// Safety cap on the number of chunk-summarize API calls we make for a single
+/// session. A pathological session that still explodes into dozens of chunks
+/// after compaction would otherwise burn through the provider's daily quota.
+pub const MAX_CHUNKS_PER_SESSION: usize = 3;
+
 const CHUNK_SUMMARIZE_PROMPT_EN: &str = include_str!("../../prompts/chunk_summarize_en.md");
 const CHUNK_SUMMARIZE_PROMPT_KO: &str = include_str!("../../prompts/chunk_summarize_ko.md");
 
@@ -116,10 +121,20 @@ pub async fn summarize_chunks(
     limits: &RateLimits,
     lang: &Lang,
 ) -> Result<String, super::AnalyzerError> {
-    let mut summaries: Vec<String> = Vec::new();
-    let total = chunks.len();
+    let effective_chunks: &[Vec<(String, String)>] = if chunks.len() > MAX_CHUNKS_PER_SESSION {
+        eprintln!(
+            "{}",
+            crate::messages::status::chunk_cap_applied(chunks.len(), MAX_CHUNKS_PER_SESSION)
+        );
+        &chunks[..MAX_CHUNKS_PER_SESSION]
+    } else {
+        chunks
+    };
 
-    for (i, chunk) in chunks.iter().enumerate() {
+    let mut summaries: Vec<String> = Vec::new();
+    let total = effective_chunks.len();
+
+    for (i, chunk) in effective_chunks.iter().enumerate() {
         let chunk_text: String = chunk
             .iter()
             .map(|(role, text)| format!("[{role}] {text}"))

@@ -54,28 +54,6 @@ fn extract_conversation_text(entries: &[LogEntry]) -> String {
     output
 }
 
-/// Recursively collects all non-empty string leaves from JSON.
-fn collect_json_string_leaves(value: &serde_json::Value, out: &mut Vec<String>) {
-    match value {
-        serde_json::Value::String(s) => {
-            if !s.trim().is_empty() {
-                out.push(s.clone());
-            }
-        }
-        serde_json::Value::Array(items) => {
-            for item in items {
-                collect_json_string_leaves(item, out);
-            }
-        }
-        serde_json::Value::Object(map) => {
-            for value in map.values() {
-                collect_json_string_leaves(value, out);
-            }
-        }
-        serde_json::Value::Null | serde_json::Value::Bool(_) | serde_json::Value::Number(_) => {}
-    }
-}
-
 fn join_unique_lines(parts: &[String]) -> String {
     let mut seen = std::collections::HashSet::new();
     let mut lines = Vec::new();
@@ -91,13 +69,49 @@ fn join_unique_lines(parts: &[String]) -> String {
     lines.join("\n")
 }
 
-fn extract_all_json_text(value: &serde_json::Value) -> String {
-    let mut parts = Vec::new();
-    collect_json_string_leaves(value, &mut parts);
-    join_unique_lines(&parts)
+/// Extracts user-visible text from a Claude user message payload, skipping
+/// `tool_result` blocks (bulk machine output). Kept separate from
+/// `extract_all_json_text` so we don't accidentally leak tool-result bodies
+/// into the analysis prompt.
+fn extract_user_message_text(message: &serde_json::Value) -> String {
+    let Some(content) = message.get("content") else {
+        return String::new();
+    };
+    if let Some(text) = content.as_str() {
+        return text.to_string();
+    }
+    let Some(blocks) = content.as_array() else {
+        return String::new();
+    };
+    let mut parts: Vec<String> = Vec::new();
+    for block in blocks {
+        let Some(block_type) = block.get("type").and_then(serde_json::Value::as_str) else {
+            continue;
+        };
+        match block_type {
+            "text" => {
+                if let Some(text) = block.get("text").and_then(serde_json::Value::as_str)
+                    && !text.is_empty()
+                {
+                    parts.push(text.to_string());
+                }
+            }
+            // Keep a marker so the model knows a tool was used without seeing
+            // the payload.
+            "tool_result" => parts.push("[tool_result]".to_string()),
+            _ => {}
+        }
+    }
+    parts.join("\n")
 }
 
 fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
+    // Content policy matches the Codex side:
+    //   - Text / Thinking: keep as-is (insight material).
+    //   - ToolUse: keep only the tool name as a marker — the input payload is
+    //     dropped because it rarely adds insight and balloons the prompt.
+    //   - ToolResult: dropped entirely — bulk machine output; the next
+    //     assistant/user turn usually paraphrases what mattered.
     let mut parts = Vec::new();
     for block in blocks {
         match block {
@@ -111,29 +125,14 @@ fn extract_assistant_text(blocks: &[ContentBlock]) -> String {
                     parts.push(thinking.clone());
                 }
             }
-            ContentBlock::ToolUse { name, id, input } => {
-                if let Some(name) = name {
-                    parts.push(name.clone());
-                }
-                if let Some(id) = id {
-                    parts.push(id.clone());
-                }
-                if let Some(input) = input {
-                    let text = extract_all_json_text(input);
-                    if !text.is_empty() {
-                        parts.push(text);
-                    }
+            ContentBlock::ToolUse { name, .. } => {
+                if let Some(name) = name
+                    && !name.is_empty()
+                {
+                    parts.push(format!("[tool: {name}]"));
                 }
             }
-            ContentBlock::ToolResult { content } => {
-                if let Some(content) = content {
-                    let text = extract_all_json_text(content);
-                    if !text.is_empty() {
-                        parts.push(text);
-                    }
-                }
-            }
-            ContentBlock::Unknown => {}
+            ContentBlock::ToolResult { .. } | ContentBlock::Unknown => {}
         }
     }
     join_unique_lines(&parts)
@@ -158,11 +157,11 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
 }
 
 fn extract_entry_text(entry: &LogEntry) -> Option<(&'static str, String)> {
-    match entry {
+    let (role, text) = match entry {
         LogEntry::User(e) => {
             let mut parts = Vec::new();
             if let Some(message) = &e.message {
-                parts.push(extract_all_json_text(message));
+                parts.push(extract_user_message_text(message));
             }
             if let Some(entrypoint) = &e.entrypoint {
                 parts.push(entrypoint.clone());
@@ -170,8 +169,7 @@ fn extract_entry_text(entry: &LogEntry) -> Option<(&'static str, String)> {
             if let Some(cwd) = &e.cwd {
                 parts.push(cwd.clone());
             }
-            let text = join_unique_lines(&parts);
-            (!text.is_empty()).then_some(("USER", text))
+            ("USER", join_unique_lines(&parts))
         }
         LogEntry::Assistant(e) => {
             let mut parts = Vec::new();
@@ -187,8 +185,7 @@ fn extract_entry_text(entry: &LogEntry) -> Option<(&'static str, String)> {
             if let Some(cwd) = &e.cwd {
                 parts.push(cwd.clone());
             }
-            let text = join_unique_lines(&parts);
-            (!text.is_empty()).then_some(("ASSISTANT", text))
+            ("ASSISTANT", join_unique_lines(&parts))
         }
         LogEntry::Progress(e) => {
             let mut parts = Vec::new();
@@ -198,19 +195,32 @@ fn extract_entry_text(entry: &LogEntry) -> Option<(&'static str, String)> {
             if let Some(cwd) = &e.cwd {
                 parts.push(cwd.clone());
             }
-            let text = join_unique_lines(&parts);
-            (!text.is_empty()).then_some(("PROGRESS", text))
+            ("PROGRESS", join_unique_lines(&parts))
         }
-        LogEntry::System(_) => None,
-        LogEntry::FileHistorySnapshot(e) => e
-            .message_id
-            .as_ref()
-            .and_then(|id| (!id.trim().is_empty()).then_some(("SNAPSHOT", id.clone()))),
+        LogEntry::System(_) => return None,
+        LogEntry::FileHistorySnapshot(e) => {
+            let id = e.message_id.as_ref()?;
+            if id.trim().is_empty() {
+                return None;
+            }
+            ("SNAPSHOT", id.clone())
+        }
         LogEntry::Other(raw) => {
-            let text = extract_all_json_text(raw);
-            (!text.is_empty()).then_some(("EVENT", text))
+            // Unknown Claude log entry types (hook events, background
+            // notifications, ...). Keep only the type marker so the prompt
+            // records that something happened without dumping the payload.
+            let event_type = raw
+                .get("type")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or("unknown");
+            ("EVENT", format!("[{event_type}]"))
         }
+    };
+
+    if text.is_empty() {
+        return None;
     }
+    Some((role, super::compaction::compact_log_like(&text)))
 }
 
 /// Extracts (role, text) tuples from LogEntries.
@@ -227,6 +237,7 @@ pub fn extract_messages(entries: &[LogEntry]) -> Vec<(String, String)> {
 
 /// Converts Codex entries into prompt text for LLM analysis.
 /// Each Codex file is a single session, so session_id is passed externally.
+/// Long log-like pastes are compacted to keep the prompt under LLM limits.
 pub fn build_codex_prompt(
     entries: &[CodexEntry],
     session_id: &str,
@@ -234,32 +245,16 @@ pub fn build_codex_prompt(
     let mut output = format!("[Session: {session_id}]\n");
     let mut has_text = false;
 
-    for entry in entries {
-        match entry {
-            CodexEntry::SessionMeta { text, .. } if !text.is_empty() => {
-                has_text = true;
-                output.push_str(&format!("[META] {text}\n"));
-            }
-            CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
-                has_text = true;
-                output.push_str(&format!("[USER] {text}\n"));
-            }
-            CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => {
-                has_text = true;
-                output.push_str(&format!("[ASSISTANT] {text}\n"));
-            }
-            CodexEntry::FunctionCall { text, .. } if !text.is_empty() => {
-                has_text = true;
-                output.push_str(&format!("[TOOL] {text}\n"));
-            }
-            CodexEntry::Other {
-                entry_type, text, ..
-            } if !text.is_empty() => {
-                has_text = true;
-                output.push_str(&format!("[EVENT:{entry_type}] {text}\n"));
-            }
-            _ => {}
+    for (role, text) in codex_role_text_pairs(entries) {
+        has_text = true;
+        output.push('[');
+        output.push_str(&role);
+        output.push(']');
+        if !text.is_empty() {
+            output.push(' ');
+            output.push_str(&text);
         }
+        output.push('\n');
     }
 
     if !has_text {
@@ -269,32 +264,43 @@ pub fn build_codex_prompt(
     Ok(output)
 }
 
-/// Extracts (role, text) tuples from Codex entries.
+/// Extracts (role, text) tuples from Codex entries with log-like pastes compacted.
 pub fn extract_codex_messages(entries: &[CodexEntry]) -> Vec<(String, String)> {
-    let mut messages = Vec::new();
-    for entry in entries {
-        match entry {
-            CodexEntry::SessionMeta { text, .. } if !text.is_empty() => {
-                messages.push(("META".to_string(), text.clone()));
-            }
-            CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
-                messages.push(("USER".to_string(), text.clone()));
-            }
-            CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => {
-                messages.push(("ASSISTANT".to_string(), text.clone()));
-            }
-            CodexEntry::FunctionCall { text, .. } if !text.is_empty() => {
-                messages.push(("TOOL".to_string(), text.clone()));
-            }
-            CodexEntry::Other {
-                entry_type, text, ..
-            } if !text.is_empty() => {
-                messages.push((format!("EVENT:{entry_type}"), text.clone()));
-            }
-            _ => {}
+    codex_role_text_pairs(entries).collect()
+}
+
+fn codex_role_text_pairs(entries: &[CodexEntry]) -> impl Iterator<Item = (String, String)> + '_ {
+    // Prompt policy:
+    //   - USER / ASSISTANT messages keep full (compacted) text: they are the
+    //     core material for insight extraction.
+    //   - FunctionCall keeps only the tool name; the raw payload is dropped
+    //     because tool outputs rarely add insight yet balloon prompt size.
+    //   - Other (event_msg, response_item/function_call_output, mcp_tool_call_end,
+    //     exec_command_end, reasoning, ...) keeps only the entry_type marker so
+    //     the model can still see that the session used tools, without
+    //     shipping megabytes of tool-output text through the LLM call.
+    //   - SessionMeta is preserved as-is (short by construction).
+    entries.iter().filter_map(|entry| match entry {
+        CodexEntry::SessionMeta { text, .. } if !text.is_empty() => Some((
+            "META".to_string(),
+            super::compaction::compact_log_like(text),
+        )),
+        CodexEntry::UserMessage { text, .. } if !text.is_empty() => Some((
+            "USER".to_string(),
+            super::compaction::compact_log_like(text),
+        )),
+        CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => Some((
+            "ASSISTANT".to_string(),
+            super::compaction::compact_log_like(text),
+        )),
+        CodexEntry::FunctionCall { name, .. } if !name.is_empty() => {
+            Some(("TOOL".to_string(), name.clone()))
         }
-    }
-    messages
+        CodexEntry::Other { entry_type, .. } if !entry_type.is_empty() => {
+            Some((format!("EVENT:{entry_type}"), String::new()))
+        }
+        _ => None,
+    })
 }
 
 /// Extracts unique session IDs from LogEntries, preserving insertion order.
@@ -407,6 +413,56 @@ mod tests {
     }
 
     #[test]
+    fn test_build_prompt_assistant_tool_use_keeps_name_drops_input() {
+        let entries = vec![serde_json::from_str::<LogEntry>(
+            r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-03-11T10:00:30Z","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_use","id":"tool_1","name":"Grep","input":{"pattern":"SECRET_INTERNAL_MARKER","glob":"**/*.rs"}}]}}"#,
+        )
+        .unwrap()];
+        let prompt = build_prompt(&entries).unwrap();
+        assert!(prompt.contains("[tool: Grep]"), "expected tool name marker");
+        assert!(
+            !prompt.contains("SECRET_INTERNAL_MARKER"),
+            "tool_use input must NOT leak into prompt, got:\n{prompt}"
+        );
+        assert!(!prompt.contains("tool_1"), "tool id must not leak either");
+    }
+
+    #[test]
+    fn test_build_prompt_assistant_tool_result_fully_dropped() {
+        let entries = vec![serde_json::from_str::<LogEntry>(
+            r#"{"type":"assistant","sessionId":"s1","timestamp":"2026-03-11T10:00:30Z","uuid":"a1","message":{"role":"assistant","content":[{"type":"tool_result","content":"HUGE_MACHINE_OUTPUT_SHOULD_NOT_APPEAR"}]}}"#,
+        )
+        .unwrap()];
+        // An assistant entry with ONLY a tool_result should produce no USER/
+        // ASSISTANT line at all.
+        let result = build_prompt(&entries);
+        assert!(result.is_err(), "empty-after-filter must surface as error");
+    }
+
+    #[test]
+    fn test_build_prompt_user_tool_result_block_dropped_from_content() {
+        let entries = vec![serde_json::from_str::<LogEntry>(
+            r#"{"type":"user","sessionId":"s1","timestamp":"2026-03-11T10:00:00Z","uuid":"u1","message":{"role":"user","content":[{"type":"text","text":"여기 결과 봐줘"},{"type":"tool_result","tool_use_id":"t1","content":"DO_NOT_LEAK_THIS_BLOB"}]}}"#,
+        )
+        .unwrap()];
+        let prompt = build_prompt(&entries).unwrap();
+        assert!(prompt.contains("여기 결과 봐줘"));
+        assert!(prompt.contains("[tool_result]"));
+        assert!(!prompt.contains("DO_NOT_LEAK_THIS_BLOB"));
+    }
+
+    #[test]
+    fn test_build_prompt_other_kept_as_type_marker_only() {
+        let entries = vec![serde_json::from_str::<LogEntry>(
+            r#"{"type":"hook_event","sessionId":"s1","payload":{"big_body":"PAYLOAD_SHOULD_BE_DROPPED"}}"#,
+        )
+        .unwrap()];
+        let prompt = build_prompt(&entries).unwrap();
+        assert!(prompt.contains("[EVENT] [hook_event]"));
+        assert!(!prompt.contains("PAYLOAD_SHOULD_BE_DROPPED"));
+    }
+
+    #[test]
     fn test_build_prompt_empty_entries_returns_error() {
         let entries: Vec<LogEntry> = vec![];
         let result = build_prompt(&entries);
@@ -450,7 +506,7 @@ mod tests {
     }
 
     #[test]
-    fn test_extract_codex_messages_includes_metadata_and_tool_entries() {
+    fn test_extract_codex_messages_drops_tool_body_and_other_body() {
         use crate::parser::codex::CodexEntry;
         let entries = vec![
             CodexEntry::SessionMeta {
@@ -458,6 +514,9 @@ mod tests {
                 session_id: "s1".to_string(),
                 cwd: "/tmp".to_string(),
                 model_provider: "openai".to_string(),
+                subagent_source: None,
+                agent_role: None,
+                agent_nickname: None,
                 text: "s1\n/tmp\nopenai".to_string(),
             },
             CodexEntry::UserMessage {
@@ -471,7 +530,12 @@ mod tests {
             CodexEntry::FunctionCall {
                 timestamp: "2026-03-11T10:00:20Z".parse().unwrap(),
                 name: "Read".to_string(),
-                text: "Read\nsrc/main.rs".to_string(),
+                text: "Read\nsrc/main.rs\n...giant file content...".to_string(),
+            },
+            CodexEntry::Other {
+                timestamp: "2026-03-11T10:00:30Z".parse().unwrap(),
+                entry_type: "response_item/function_call_output".to_string(),
+                text: "huge multi-megabyte payload that must be dropped".to_string(),
             },
         ];
         let messages = extract_codex_messages(&entries);
@@ -481,9 +545,46 @@ mod tests {
                 ("META".to_string(), "s1\n/tmp\nopenai".to_string()),
                 ("USER".to_string(), "질문".to_string()),
                 ("ASSISTANT".to_string(), "답변".to_string()),
-                ("TOOL".to_string(), "Read\nsrc/main.rs".to_string())
+                ("TOOL".to_string(), "Read".to_string()),
+                (
+                    "EVENT:response_item/function_call_output".to_string(),
+                    String::new(),
+                ),
             ]
         );
+    }
+
+    #[test]
+    fn test_build_codex_prompt_omits_tool_and_event_bodies() {
+        use crate::parser::codex::CodexEntry;
+        let entries = vec![
+            CodexEntry::UserMessage {
+                timestamp: "2026-03-11T10:00:00Z".parse().unwrap(),
+                text: "리뷰해줘".to_string(),
+            },
+            CodexEntry::FunctionCall {
+                timestamp: "2026-03-11T10:00:05Z".parse().unwrap(),
+                name: "Grep".to_string(),
+                text: "Grep\n... huge args ...".to_string(),
+            },
+            CodexEntry::Other {
+                timestamp: "2026-03-11T10:00:06Z".parse().unwrap(),
+                entry_type: "event_msg/mcp_tool_call_end".to_string(),
+                text: "... multi-MB tool result ...".to_string(),
+            },
+            CodexEntry::AssistantMessage {
+                timestamp: "2026-03-11T10:00:10Z".parse().unwrap(),
+                text: "완료".to_string(),
+            },
+        ];
+        let prompt = build_codex_prompt(&entries, "s1").unwrap();
+        assert!(prompt.contains("[USER] 리뷰해줘"));
+        assert!(prompt.contains("[TOOL] Grep"));
+        assert!(prompt.contains("[EVENT:event_msg/mcp_tool_call_end]\n"));
+        assert!(prompt.contains("[ASSISTANT] 완료"));
+        // Must NOT leak the dropped bodies.
+        assert!(!prompt.contains("huge args"));
+        assert!(!prompt.contains("multi-MB tool result"));
     }
 
     #[test]

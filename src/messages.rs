@@ -142,6 +142,12 @@ pub mod config {
             "Unsupported codex reasoning effort: '{value}'. Available: low, medium, high, xhigh, default"
         )
     }
+
+    pub fn missing_env_var(name: &str) -> String {
+        format!(
+            "Environment variable `{name}` referenced in config is not set. Export it before running rwd, or replace the placeholder with a literal value."
+        )
+    }
 }
 
 /// Messages for `rwd reset`.
@@ -346,6 +352,12 @@ pub mod status {
 
     pub fn chunk_done(i: usize, total: usize) -> String {
         format!("    \u{2713} Chunk {i}/{total} done")
+    }
+
+    pub fn chunk_cap_applied(requested: usize, cap: usize) -> String {
+        format!(
+            "    \u{26A0} Session produced {requested} chunks; capping to first {cap} to preserve quota"
+        )
     }
 
     pub fn plan_multi_step_scoped(source: &str, steps: usize, total_tokens: u64) -> String {

@@ -67,7 +67,9 @@ impl LlmProvider {
     /// None means no explicit character cap is enforced here.
     pub fn max_conversation_chars(&self, lang: &Lang) -> Option<usize> {
         match self {
-            LlmProvider::Codex { .. } => Some(codex_max_conversation_chars(get_system_prompt(lang))),
+            LlmProvider::Codex { .. } => {
+                Some(codex_max_conversation_chars(get_system_prompt(lang)))
+            }
             _ => None,
         }
     }
@@ -249,11 +251,19 @@ impl LlmProvider {
 }
 
 /// Loads the LLM provider and API key from config (~/.config/rwd/config.toml).
+///
+/// `${VAR}` placeholders in API key fields are resolved from the process
+/// environment, so `openai_api_key = "${OPENAI_API_KEY}"` keeps the secret
+/// out of config.toml.
 pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
     let config = crate::config::load_config_if_exists().ok_or(crate::messages::error::NO_CONFIG)?;
 
+    let resolve = |raw: &str| -> Result<String, super::AnalyzerError> {
+        crate::config::resolve_env_placeholders(raw).map_err(|e| e.to_string().into())
+    };
+
     let (provider, api_key) = match config.llm.provider.as_str() {
-        "openai" => (LlmProvider::OpenAi, config.llm.openai_api_key.clone()),
+        "openai" => (LlmProvider::OpenAi, resolve(&config.llm.openai_api_key)?),
         "codex" => {
             let model = config
                 .llm
@@ -275,7 +285,10 @@ pub fn load_provider() -> Result<(LlmProvider, String), super::AnalyzerError> {
                 String::new(),
             )
         }
-        "anthropic" => (LlmProvider::Anthropic, config.llm.anthropic_api_key.clone()),
+        "anthropic" => (
+            LlmProvider::Anthropic,
+            resolve(&config.llm.anthropic_api_key)?,
+        ),
         other => return Err(crate::messages::error::unsupported_provider_in_config(other).into()),
     };
     Ok((provider, api_key))

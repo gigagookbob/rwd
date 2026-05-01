@@ -1042,6 +1042,11 @@ fn collect_codex_sessions(
     for mut entries in merged_entries.into_values() {
         entries = parser::codex::dedupe_entries(entries);
         parser::codex::sort_entries_by_timestamp(&mut entries);
+        if parser::codex::classify_codex_session(&entries)
+            == parser::codex::CodexSessionKind::Subagent
+        {
+            continue;
+        }
         let summary = parser::codex::summarize_codex_entries(&entries);
         if summary.user_count > 0 || summary.assistant_count > 0 {
             sessions.push((summary, entries));
@@ -1420,6 +1425,25 @@ mod tests {
         ))
     }
 
+    fn write_codex_rollout(file: &std::path::Path, session_id: &str, cwd: &str, extra_meta: &str) {
+        let mut handle = std::fs::File::create(file).expect("rollout file");
+        writeln!(
+            handle,
+            r#"{{"timestamp":"2099-01-01T12:00:00Z","type":"session_meta","payload":{{"id":"{session_id}","cwd":"{cwd}","model_provider":"openai"{extra_meta}}}}}"#
+        )
+        .expect("session meta");
+        writeln!(
+            handle,
+            r#"{{"timestamp":"2099-01-01T12:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello"}}}}"#
+        )
+        .expect("user message");
+        writeln!(
+            handle,
+            r#"{{"timestamp":"2099-01-01T12:02:00Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"done"}}]}}}}"#
+        )
+        .expect("assistant message");
+    }
+
     #[test]
     fn test_collect_claude_entries_dedupes_across_roots() {
         // Use a far-future date to avoid collisions with real local logs.
@@ -1523,6 +1547,123 @@ mod tests {
     }
 
     #[test]
+    fn test_collect_codex_sessions_excludes_explicit_subagent_sessions() {
+        let date = chrono::NaiveDate::from_ymd_opt(2099, 1, 1).expect("date");
+        let base = unique_temp_dir("rwd_test_codex_subagent_excluded");
+        let root = base.join("codex-root");
+        let day_dir = root.join("2099").join("01").join("01");
+        std::fs::create_dir_all(&day_dir).expect("day dir");
+
+        let rollout_file = day_dir.join("rollout-subagent.jsonl");
+        write_codex_rollout(
+            &rollout_file,
+            "codex-subagent-1",
+            "/Users/jinwoohan/.codex/memories",
+            r#","source":{"subagent":"memory_consolidation"},"agent_role":"memory builder","agent_nickname":"Morpheus""#,
+        );
+
+        let cfg = test_config(Some(vec![root.to_string_lossy().to_string()]), None);
+        let (sessions, roots) = collect_codex_sessions(date, Some(&cfg));
+
+        assert!(roots.starts_with(std::slice::from_ref(&root)));
+        assert!(sessions.is_empty());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_collect_codex_sessions_excludes_mixed_session_id_when_merged_session_is_subagent() {
+        let date = chrono::NaiveDate::from_ymd_opt(2099, 1, 1).expect("date");
+        let base = unique_temp_dir("rwd_test_codex_mixed_session_id_subagent");
+        let root_a = base.join("codex-a");
+        let root_b = base.join("codex-b");
+        let day_dir_a = root_a.join("2099").join("01").join("01");
+        let day_dir_b = root_b.join("2099").join("01").join("01");
+        std::fs::create_dir_all(&day_dir_a).expect("day a");
+        std::fs::create_dir_all(&day_dir_b).expect("day b");
+
+        let mut file_a = std::fs::File::create(day_dir_a.join("rollout-a.jsonl")).expect("file a");
+        writeln!(
+            file_a,
+            r#"{{"timestamp":"2099-01-01T12:00:00Z","type":"session_meta","payload":{{"id":"codex-mixed-1","cwd":"/Users/jinwoohan/.codex/memories","model_provider":"openai","source":{{"subagent":"memory_consolidation"}},"agent_role":"memory builder","agent_nickname":"Morpheus"}}}}"#
+        )
+        .expect("subagent meta");
+        writeln!(
+            file_a,
+            r#"{{"timestamp":"2099-01-01T12:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello from subagent"}}}}"#
+        )
+        .expect("subagent user");
+
+        let mut file_b = std::fs::File::create(day_dir_b.join("rollout-b.jsonl")).expect("file b");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:00:00Z","type":"session_meta","payload":{{"id":"codex-mixed-1","cwd":"/Users/jinwoohan/workspace/repos/personal/rwd","model_provider":"openai","source":"cli"}}}}"#
+        )
+        .expect("interactive meta");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:01:00Z","type":"event_msg","payload":{{"type":"user_message","message":"hello from interactive"}}}}"#
+        )
+        .expect("interactive user");
+        writeln!(
+            file_b,
+            r#"{{"timestamp":"2099-01-01T12:02:00Z","type":"response_item","payload":{{"type":"message","role":"assistant","content":[{{"type":"output_text","text":"done"}}]}}}}"#
+        )
+        .expect("interactive assistant");
+
+        let cfg = test_config(
+            Some(vec![
+                root_a.to_string_lossy().to_string(),
+                root_b.to_string_lossy().to_string(),
+            ]),
+            None,
+        );
+        let (sessions, roots) = collect_codex_sessions(date, Some(&cfg));
+
+        assert!(roots.starts_with(&[root_a.clone(), root_b.clone()]));
+        assert!(sessions.is_empty());
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
+    fn test_collect_codex_sessions_keeps_worktree_interactive_sessions_without_hard_signal() {
+        let date = chrono::NaiveDate::from_ymd_opt(2099, 1, 1).expect("date");
+        let base = unique_temp_dir("rwd_test_codex_worktree_interactive");
+        let root = base.join("codex-root");
+        let day_dir = root.join("2099").join("01").join("01");
+        std::fs::create_dir_all(&day_dir).expect("day dir");
+
+        let worktree_cwd = "/Users/jinwoohan/.codex/worktrees/1234/rwd".to_string();
+        let rollout_file = day_dir.join("rollout-interactive.jsonl");
+        write_codex_rollout(
+            &rollout_file,
+            "codex-worktree-1",
+            &worktree_cwd,
+            r#","source":"cli""#,
+        );
+
+        let cfg = test_config(Some(vec![root.to_string_lossy().to_string()]), None);
+        let (sessions, roots) = collect_codex_sessions(date, Some(&cfg));
+
+        assert!(roots.starts_with(std::slice::from_ref(&root)));
+        assert_eq!(sessions.len(), 1);
+        let (summary, entries) = &sessions[0];
+        assert_eq!(summary.session_id, "codex-worktree-1");
+        assert_eq!(summary.cwd, worktree_cwd);
+        assert_eq!(
+            parser::codex::classify_codex_session(entries),
+            parser::codex::CodexSessionKind::Interactive
+        );
+        assert!(matches!(
+            entries.first(),
+            Some(parser::codex::CodexEntry::SessionMeta { .. })
+        ));
+
+        std::fs::remove_dir_all(&base).ok();
+    }
+
+    #[test]
     fn test_codex_time_range_ignores_previous_day_session_meta() {
         let session_meta_ts = chrono::Local
             .with_ymd_and_hms(2099, 1, 1, 23, 28, 0)
@@ -1556,6 +1697,9 @@ mod tests {
                     session_id: "s1".to_string(),
                     cwd: "/tmp".to_string(),
                     model_provider: "openai".to_string(),
+                    subagent_source: None,
+                    agent_role: None,
+                    agent_nickname: None,
                     text: "s1\n/tmp\nopenai".to_string(),
                 },
                 parser::codex::CodexEntry::UserMessage {

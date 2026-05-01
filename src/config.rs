@@ -213,6 +213,55 @@ pub fn load_config_if_exists() -> Option<Config> {
     }
 }
 
+/// Resolves `${VAR}` placeholders in `template` from process environment.
+///
+/// Used to keep API keys out of config.toml on disk: users may write
+/// `openai_api_key = "${OPENAI_API_KEY}"` and have rwd read the actual
+/// secret from the shell environment at runtime. Only `${NAME}` is
+/// recognized (no `$NAME` shorthand) and only ASCII letters, digits, and
+/// underscores are allowed in the variable name. Strings with no placeholder
+/// pass through unchanged so existing literal-key configs keep working.
+pub fn resolve_env_placeholders(template: &str) -> Result<String, ConfigError> {
+    if !template.contains("${") {
+        return Ok(template.to_string());
+    }
+
+    let bytes = template.as_bytes();
+    let mut out = String::with_capacity(template.len());
+    let mut i = 0;
+    while i < bytes.len() {
+        if bytes[i] == b'$' && i + 1 < bytes.len() && bytes[i + 1] == b'{' {
+            let start = i + 2;
+            let Some(end_off) = bytes[start..].iter().position(|&b| b == b'}') else {
+                out.push_str(&template[i..]);
+                break;
+            };
+            let end = start + end_off;
+            let name = &template[start..end];
+            if name.is_empty() || !name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                // Not a valid env-var reference; emit literally.
+                out.push_str(&template[i..=end]);
+                i = end + 1;
+                continue;
+            }
+            let value =
+                std::env::var(name).map_err(|_| crate::messages::config::missing_env_var(name))?;
+            out.push_str(&value);
+            i = end + 1;
+        } else {
+            // Push one UTF-8 char at a time to avoid splitting code points.
+            let ch_len = template[i..]
+                .chars()
+                .next()
+                .map(|c| c.len_utf8())
+                .unwrap_or(1);
+            out.push_str(&template[i..i + ch_len]);
+            i += ch_len;
+        }
+    }
+    Ok(out)
+}
+
 /// `rwd init` — prompts for API key, detects output path, and saves config.
 pub fn run_init() -> Result<(), ConfigError> {
     let config_file = config_path()?;
@@ -778,6 +827,17 @@ async fn verify_api_key(provider: &str, api_key: &str) {
     let green = "\x1b[32m";
     let yellow = "\x1b[33m";
     let reset = "\x1b[0m";
+
+    // Resolve `${VAR}` placeholders so verify works against the live secret,
+    // not the template string stored on disk.
+    let resolved = match resolve_env_placeholders(api_key) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("\r{yellow}{e}{reset}");
+            return;
+        }
+    };
+    let api_key = resolved.as_str();
 
     if provider == "codex" {
         eprint!(
@@ -1802,5 +1862,51 @@ path = "/tmp/vault"
             infer_codex_login_state(true, "Logged in", "Not logged in"),
             CodexLoginState::NotLoggedIn
         );
+    }
+
+    #[test]
+    fn test_resolve_env_placeholders_passthrough_when_no_placeholder() {
+        let out = resolve_env_placeholders("sk-literal-key").expect("no placeholder");
+        assert_eq!(out, "sk-literal-key");
+    }
+
+    #[test]
+    fn test_resolve_env_placeholders_substitutes_known_var() {
+        // SAFETY: setting an env var on a single-threaded test point.
+        unsafe {
+            std::env::set_var("RWD_TEST_RESOLVE_KEY", "from-env");
+        }
+        let out =
+            resolve_env_placeholders("prefix-${RWD_TEST_RESOLVE_KEY}-suffix").expect("resolves");
+        assert_eq!(out, "prefix-from-env-suffix");
+        unsafe {
+            std::env::remove_var("RWD_TEST_RESOLVE_KEY");
+        }
+    }
+
+    #[test]
+    fn test_resolve_env_placeholders_errors_on_missing_var() {
+        unsafe {
+            std::env::remove_var("RWD_TEST_RESOLVE_MISSING");
+        }
+        let err = resolve_env_placeholders("${RWD_TEST_RESOLVE_MISSING}").unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("RWD_TEST_RESOLVE_MISSING"),
+            "error should name the missing var, got: {msg}"
+        );
+    }
+
+    #[test]
+    fn test_resolve_env_placeholders_emits_invalid_token_literally() {
+        // `${ }` (with a space) is not a valid env-var name; pass it through.
+        let out = resolve_env_placeholders("hello ${not a var} world").expect("literal");
+        assert_eq!(out, "hello ${not a var} world");
+    }
+
+    #[test]
+    fn test_resolve_env_placeholders_unterminated_brace_passes_through() {
+        let out = resolve_env_placeholders("${OPEN_AI_KEY").expect("passes through");
+        assert_eq!(out, "${OPEN_AI_KEY");
     }
 }

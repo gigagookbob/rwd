@@ -155,8 +155,8 @@ pub enum AuthAction {
 #[cfg(test)]
 mod tests {
     use super::{Cli, Commands};
-    use clap::error::ErrorKind;
     use clap::Parser;
+    use clap::error::ErrorKind;
 
     #[test]
     fn test_parse_version_subcommand() {
