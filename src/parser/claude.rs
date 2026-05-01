@@ -45,6 +45,10 @@ pub struct UserEntry {
     pub cwd: Option<String>,
     #[serde(default)]
     pub message: Option<serde_json::Value>,
+    /// Marks Task-tool subagent turns. When true, the entry belongs to a
+    /// nested agent invocation rather than the parent interactive session.
+    #[serde(default)]
+    pub is_sidechain: bool,
 }
 
 /// Assistant (AI) response entry.
@@ -60,6 +64,8 @@ pub struct AssistantEntry {
     pub cwd: Option<String>,
     #[serde(default)]
     pub message: Option<AssistantMessage>,
+    #[serde(default)]
+    pub is_sidechain: bool,
 }
 
 /// Detailed structure of an assistant message.
@@ -130,6 +136,8 @@ pub struct ProgressEntry {
     pub entrypoint: Option<String>,
     #[serde(default)]
     pub cwd: Option<String>,
+    #[serde(default)]
+    pub is_sidechain: bool,
 }
 
 /// System entry.
@@ -436,11 +444,34 @@ fn entry_session_id(entry: &LogEntry) -> Option<&str> {
     }
 }
 
+/// Returns true when the entry came from a Task-tool subagent turn.
+///
+/// Sidechain entries share the parent's `session_id` but represent work done
+/// by a nested agent. We exclude them so subagent activity does not double up
+/// the session count or inflate the parent's token totals.
+fn entry_is_sidechain(entry: &LogEntry) -> bool {
+    match entry {
+        LogEntry::User(e) => e.is_sidechain,
+        LogEntry::Assistant(e) => e.is_sidechain,
+        LogEntry::Progress(e) => e.is_sidechain,
+        LogEntry::System(_) | LogEntry::FileHistorySnapshot(_) | LogEntry::Other(_) => false,
+    }
+}
+
 /// Filters automated Claude sessions from entries unless explicitly included.
+///
+/// Subagent (sidechain) entries are always dropped before counting, so a
+/// session that consists entirely of Task-tool turns disappears from the
+/// totals rather than appearing as an extra parent session.
 pub fn filter_automated_sessions(
     entries: Vec<LogEntry>,
     include_automated: bool,
 ) -> SessionFilterResult {
+    let entries: Vec<LogEntry> = entries
+        .into_iter()
+        .filter(|entry| !entry_is_sidechain(entry))
+        .collect();
+
     let automated_session_ids: HashSet<String> = entries
         .iter()
         .filter(|entry| is_automated_entry(entry))
@@ -753,5 +784,60 @@ mod tests {
         assert_eq!(filtered.counts.automated, 2);
         assert_eq!(summaries.len(), 1);
         assert_eq!(summaries[0].session_id, "s5");
+    }
+
+    #[test]
+    fn test_filter_automated_sessions_drops_inline_sidechain_entries() {
+        // Parent session with one sidechain (Task subagent) turn mixed in.
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"parent","timestamp":"2026-03-11T13:00:00Z","uuid":"p1","entrypoint":"cli","isSidechain":false,"message":{"content":"hello"}}"#,
+            )
+            .expect("parent user"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"assistant","sessionId":"parent","timestamp":"2026-03-11T13:00:05Z","uuid":"sub-a1","entrypoint":"cli","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"subagent reply"}]}}"#,
+            )
+            .expect("sidechain assistant"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"parent","timestamp":"2026-03-11T13:00:10Z","uuid":"p2","entrypoint":"cli","isSidechain":false,"message":{"content":"continue"}}"#,
+            )
+            .expect("parent follow-up"),
+        ];
+
+        let filtered = filter_automated_sessions(entries, false);
+        let summaries = summarize_entries(&filtered.entries);
+
+        assert_eq!(filtered.counts.interactive, 1);
+        assert_eq!(filtered.counts.automated, 0);
+        // Sidechain assistant turn is dropped, so the parent session has 2 user
+        // entries and 0 assistant entries.
+        assert_eq!(summaries.len(), 1);
+        assert_eq!(summaries[0].session_id, "parent");
+        assert_eq!(summaries[0].user_count, 2);
+        assert_eq!(summaries[0].assistant_count, 0);
+    }
+
+    #[test]
+    fn test_filter_automated_sessions_drops_subagent_only_session_from_count() {
+        // A file that contains only sidechain entries (e.g. an `agent-*.jsonl`
+        // file that somehow leaked into the discovery path) should not show up
+        // as a counted session at all.
+        let entries = vec![
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"user","sessionId":"sub-only","timestamp":"2026-03-11T14:00:00Z","uuid":"s1","entrypoint":"cli","isSidechain":true,"message":{"content":"task spec"}}"#,
+            )
+            .expect("sidechain user"),
+            serde_json::from_str::<LogEntry>(
+                r#"{"type":"assistant","sessionId":"sub-only","timestamp":"2026-03-11T14:00:05Z","uuid":"s2","entrypoint":"cli","isSidechain":true,"message":{"role":"assistant","content":[{"type":"text","text":"done"}]}}"#,
+            )
+            .expect("sidechain assistant"),
+        ];
+
+        let filtered = filter_automated_sessions(entries, false);
+        let summaries = summarize_entries(&filtered.entries);
+
+        assert_eq!(filtered.counts.interactive, 0);
+        assert_eq!(filtered.counts.automated, 0);
+        assert!(summaries.is_empty());
     }
 }
