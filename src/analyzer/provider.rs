@@ -67,7 +67,9 @@ impl LlmProvider {
     /// None means no explicit character cap is enforced here.
     pub fn max_conversation_chars(&self, lang: &Lang) -> Option<usize> {
         match self {
-            LlmProvider::Codex { .. } => Some(codex_max_conversation_chars(get_system_prompt(lang))),
+            LlmProvider::Codex { .. } => {
+                Some(codex_max_conversation_chars(get_system_prompt(lang)))
+            }
             _ => None,
         }
     }
