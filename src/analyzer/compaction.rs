@@ -336,8 +336,7 @@ mod tests {
     }
 
     fn big_flutter_block(n: usize) -> String {
-        let line =
-            "flutter: ✅ [Sounds] 경로 기반 프리로드 완료 (성공: 63, 실패: 0)\n";
+        let line = "flutter: ✅ [Sounds] 경로 기반 프리로드 완료 (성공: 63, 실패: 0)\n";
         line.repeat(n)
     }
 

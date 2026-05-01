@@ -269,9 +269,7 @@ pub fn extract_codex_messages(entries: &[CodexEntry]) -> Vec<(String, String)> {
     codex_role_text_pairs(entries).collect()
 }
 
-fn codex_role_text_pairs(
-    entries: &[CodexEntry],
-) -> impl Iterator<Item = (String, String)> + '_ {
+fn codex_role_text_pairs(entries: &[CodexEntry]) -> impl Iterator<Item = (String, String)> + '_ {
     // Prompt policy:
     //   - USER / ASSISTANT messages keep full (compacted) text: they are the
     //     core material for insight extraction.
@@ -283,12 +281,14 @@ fn codex_role_text_pairs(
     //     shipping megabytes of tool-output text through the LLM call.
     //   - SessionMeta is preserved as-is (short by construction).
     entries.iter().filter_map(|entry| match entry {
-        CodexEntry::SessionMeta { text, .. } if !text.is_empty() => {
-            Some(("META".to_string(), super::compaction::compact_log_like(text)))
-        }
-        CodexEntry::UserMessage { text, .. } if !text.is_empty() => {
-            Some(("USER".to_string(), super::compaction::compact_log_like(text)))
-        }
+        CodexEntry::SessionMeta { text, .. } if !text.is_empty() => Some((
+            "META".to_string(),
+            super::compaction::compact_log_like(text),
+        )),
+        CodexEntry::UserMessage { text, .. } if !text.is_empty() => Some((
+            "USER".to_string(),
+            super::compaction::compact_log_like(text),
+        )),
         CodexEntry::AssistantMessage { text, .. } if !text.is_empty() => Some((
             "ASSISTANT".to_string(),
             super::compaction::compact_log_like(text),

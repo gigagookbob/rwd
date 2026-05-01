@@ -230,5 +230,4 @@ mod tests {
         let wait = calculate_wait(100, &limits);
         assert!((wait - 1.2).abs() < 0.1);
     }
-
 }

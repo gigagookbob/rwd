@@ -1425,12 +1425,7 @@ mod tests {
         ))
     }
 
-    fn write_codex_rollout(
-        file: &std::path::Path,
-        session_id: &str,
-        cwd: &str,
-        extra_meta: &str,
-    ) {
+    fn write_codex_rollout(file: &std::path::Path, session_id: &str, cwd: &str, extra_meta: &str) {
         let mut handle = std::fs::File::create(file).expect("rollout file");
         writeln!(
             handle,
@@ -1641,7 +1636,12 @@ mod tests {
 
         let worktree_cwd = "/Users/jinwoohan/.codex/worktrees/1234/rwd".to_string();
         let rollout_file = day_dir.join("rollout-interactive.jsonl");
-        write_codex_rollout(&rollout_file, "codex-worktree-1", &worktree_cwd, r#","source":"cli""#);
+        write_codex_rollout(
+            &rollout_file,
+            "codex-worktree-1",
+            &worktree_cwd,
+            r#","source":"cli""#,
+        );
 
         let cfg = test_config(Some(vec![root.to_string_lossy().to_string()]), None);
         let (sessions, roots) = collect_codex_sessions(date, Some(&cfg));
@@ -1655,7 +1655,10 @@ mod tests {
             parser::codex::classify_codex_session(entries),
             parser::codex::CodexSessionKind::Interactive
         );
-        assert!(matches!(entries.first(), Some(parser::codex::CodexEntry::SessionMeta { .. })));
+        assert!(matches!(
+            entries.first(),
+            Some(parser::codex::CodexEntry::SessionMeta { .. })
+        ));
 
         std::fs::remove_dir_all(&base).ok();
     }

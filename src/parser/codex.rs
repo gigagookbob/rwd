@@ -628,9 +628,7 @@ mod tests {
         use chrono::TimeZone;
 
         CodexEntry::SessionMeta {
-            timestamp: chrono::Utc
-                .with_ymd_and_hms(2026, 4, 22, 9, 0, 0)
-                .unwrap(),
+            timestamp: chrono::Utc.with_ymd_and_hms(2026, 4, 22, 9, 0, 0).unwrap(),
             session_id: session_id.to_string(),
             cwd: cwd.to_string(),
             model_provider: "openai".to_string(),
@@ -667,10 +665,7 @@ mod tests {
             None,
         )];
 
-        assert_eq!(
-            classify_codex_session(&entries),
-            CodexSessionKind::Subagent
-        );
+        assert_eq!(classify_codex_session(&entries), CodexSessionKind::Subagent);
     }
 
     #[test]
@@ -683,10 +678,7 @@ mod tests {
             None,
         )];
 
-        assert_eq!(
-            classify_codex_session(&entries),
-            CodexSessionKind::Subagent
-        );
+        assert_eq!(classify_codex_session(&entries), CodexSessionKind::Subagent);
     }
 
     #[test]
@@ -699,10 +691,7 @@ mod tests {
             Some("Morpheus"),
         )];
 
-        assert_eq!(
-            classify_codex_session(&entries),
-            CodexSessionKind::Subagent
-        );
+        assert_eq!(classify_codex_session(&entries), CodexSessionKind::Subagent);
     }
 
     #[test]

@@ -732,13 +732,15 @@ fn should_force_summarize_by_chars(
     conversation_text: &str,
     extra_chars: usize,
 ) -> bool {
-    provider.max_conversation_chars(lang).is_some_and(|max_chars| {
-        conversation_text
-            .chars()
-            .count()
-            .saturating_add(extra_chars)
-            > max_chars
-    })
+    provider
+        .max_conversation_chars(lang)
+        .is_some_and(|max_chars| {
+            conversation_text
+                .chars()
+                .count()
+                .saturating_add(extra_chars)
+                > max_chars
+        })
 }
 
 /// Direct step: sends the session prompt as-is.
