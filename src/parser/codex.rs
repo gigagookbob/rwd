@@ -614,7 +614,7 @@ mod tests {
         }
     }
 
-    fn classify_session_meta(
+    fn make_session_meta_entry(
         session_id: &str,
         cwd: &str,
         subagent_source: Option<&str>,
@@ -639,7 +639,7 @@ mod tests {
 
     #[test]
     fn test_classify_codex_session_kind_interactive_when_only_suspicious_cwd_present() {
-        let entries = vec![classify_session_meta(
+        let entries = vec![make_session_meta_entry(
             "interactive",
             "/Users/jinwoohan/.codex/worktrees/1234/rwd",
             None,
@@ -655,7 +655,7 @@ mod tests {
 
     #[test]
     fn test_classify_codex_session_kind_uses_subagent_source_only() {
-        let entries = vec![classify_session_meta(
+        let entries = vec![make_session_meta_entry(
             "subagent-source",
             "/Users/jinwoohan/workspace/repos/personal/rwd",
             Some("memory_consolidation"),
@@ -671,7 +671,7 @@ mod tests {
 
     #[test]
     fn test_classify_codex_session_kind_uses_agent_role_only() {
-        let entries = vec![classify_session_meta(
+        let entries = vec![make_session_meta_entry(
             "subagent-role",
             "/Users/jinwoohan/.codex/memories",
             None,
@@ -687,7 +687,7 @@ mod tests {
 
     #[test]
     fn test_classify_codex_session_kind_uses_agent_nickname_only() {
-        let entries = vec![classify_session_meta(
+        let entries = vec![make_session_meta_entry(
             "subagent-nickname",
             "/Users/jinwoohan/.codex/memories",
             None,
