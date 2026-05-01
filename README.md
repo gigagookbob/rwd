@@ -92,6 +92,23 @@ rwd reset --dry-run                      # Preview reset targets
 rwd reset --yes                          # Reset local config/cache state
 ```
 
+### API keys via environment variables
+
+`openai_api_key` and `anthropic_api_key` in `~/.config/rwd/config.toml`
+support `${VAR}` placeholders, expanded from the process environment at
+runtime. Use this to keep secrets out of the file (and out of backups
+like Time Machine / iCloud):
+
+```toml
+[llm]
+provider = "openai"
+openai_api_key = "${OPENAI_API_KEY}"
+```
+
+If the referenced variable is not set when `rwd` runs, the command fails
+with a clear error naming the missing variable. Literal keys (those
+without a `${...}` placeholder) keep working unchanged.
+
 ### Sensitive data masking
 
 When running `rwd today`, sensitive data in session logs (API keys, tokens, private IPs, etc.) is automatically masked before sending to the LLM. Enabled by default. To disable, add to `~/.config/rwd/config.toml`:
