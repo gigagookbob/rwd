@@ -130,6 +130,10 @@ fn extract_subagent_source(payload: &serde_json::Value) -> Option<String> {
     optional_non_empty_string(source.get("subagent")?)
 }
 
+/// Returns `Subagent` if any `SessionMeta` entry carries an explicit hard
+/// signal (`source.subagent`, `agent_role`, or `agent_nickname`); otherwise
+/// `Interactive`. Conservative by design: a single hard signal in any merged
+/// entry classifies the whole session as a subagent.
 pub fn classify_codex_session(entries: &[CodexEntry]) -> CodexSessionKind {
     for entry in entries {
         if let CodexEntry::SessionMeta {
