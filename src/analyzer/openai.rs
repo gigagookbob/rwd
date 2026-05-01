@@ -12,7 +12,8 @@ struct ChatRequest {
     model: String,
     messages: Vec<ChatMessage>,
     max_tokens: u32,
-    response_format: ResponseFormat,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    response_format: Option<ResponseFormat>,
 }
 
 /// Forces JSON output mode.
@@ -80,9 +81,9 @@ pub async fn call_openai_api(
             },
         ],
         max_tokens,
-        response_format: ResponseFormat {
+        response_format: Some(ResponseFormat {
             format_type: "json_object".to_string(),
-        },
+        }),
     };
 
     let response = client
@@ -118,6 +119,12 @@ pub async fn call_openai_api(
 }
 
 /// API call variant with explicit max_tokens.
+///
+/// Used for chunk summarization, which produces free-form text rather than
+/// JSON. We deliberately omit `response_format: json_object` here because
+/// OpenAI requires the literal word "json" to appear somewhere in the
+/// messages whenever that mode is set, and chunk-summary prompts do not
+/// mention JSON.
 pub async fn call_openai_api_with_max_tokens(
     api_key: &str,
     system_prompt: &str,
@@ -138,9 +145,7 @@ pub async fn call_openai_api_with_max_tokens(
             },
         ],
         max_tokens,
-        response_format: ResponseFormat {
-            format_type: "json_object".to_string(),
-        },
+        response_format: None,
     };
     let response = client
         .post(API_URL)
