@@ -142,6 +142,12 @@ pub mod config {
             "Unsupported codex reasoning effort: '{value}'. Available: low, medium, high, xhigh, default"
         )
     }
+
+    pub fn missing_env_var(name: &str) -> String {
+        format!(
+            "Environment variable `{name}` referenced in config is not set. Export it before running rwd, or replace the placeholder with a literal value."
+        )
+    }
 }
 
 /// Messages for `rwd reset`.
