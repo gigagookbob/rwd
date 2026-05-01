@@ -139,7 +139,10 @@ Update notice env toggles:
 
 Claude session filtering:
 - Default behavior excludes automated Claude sessions from `rwd today`.
-- Enable globally with:
+- Task-tool subagent (sidechain) entries are always dropped before counting,
+  so they never inflate the parent session's totals or appear as separate
+  sessions. There is no opt-in to include them.
+- Enable automated-session inclusion globally with:
 ```toml
 [input.claude]
 include_automated = true
