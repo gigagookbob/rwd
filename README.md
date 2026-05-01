@@ -129,6 +129,12 @@ include_automated = true
 ```
 - Keep custom Claude roots in either legacy `[input] claude_roots = [...]` or new `[input.claude] roots = [...]`.
 
+Codex session filtering:
+- Default behavior excludes sessions with explicit subagent metadata in `session_meta`.
+- Hard signals are `source.subagent`, `agent_role`, and `agent_nickname`.
+- Worktree interactive sessions are still included by default.
+- `cwd` patterns and prompt heuristics are not used.
+
 ## Release policy (maintainers)
 
 - Release is triggered automatically on `main` push only when these files changed:
